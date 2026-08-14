@@ -1,0 +1,16 @@
+# DeepSeek Companion — bundle patch layer
+# 当 profile 的 dsh.profile.bundles 列出本包时，该层被应用。
+# 每个功能模块在此独立成行：注释掉某行（或加 disabled: true）即可整体停用它。
+
+- insert:
+    - id: companion
+      name: dsh-companion
+      config:
+        # 四个功能模块可独立启停，互不影响
+        enableExport: true
+        enableHandoff: true
+        enableCost: true
+        enableSearch: true
+        # DeepSeek 官方 API（权限最小化：manifest.json 仅放行该域名）
+        apiBaseUrl: 'https://api.deepseek.com'
+        apiTimeoutMs: 60000

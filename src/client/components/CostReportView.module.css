@@ -1,0 +1,282 @@
+/* 成本报表视图页样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px;
+  overflow-y: auto;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rangeToggle {
+  display: flex;
+  gap: 6px;
+}
+
+.error {
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+/* 汇总卡片 */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.cardValue {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.cardLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* 分区 */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 预算进度条 */
+
+.budgetRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.progressTrack {
+  flex: 1;
+  min-width: 160px;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progressNormal {
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.progressWarning {
+  background: var(--dsw-alias-warning-default, #ff9500);
+}
+
+.progressDanger {
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.budgetText {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  white-space: nowrap;
+}
+
+.budgetEdit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.budgetInput {
+  flex: 1;
+  max-width: 280px;
+}
+
+.pausedBadge {
+  color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+/* 纯 CSS 条形图 */
+
+.chartLegend {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.legendDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 2px;
+}
+
+.legendTokens {
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.legendCost {
+  background: var(--dsw-alias-success-default, #00a870);
+}
+
+.chart {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  height: 180px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.chartDay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1 0 32px;
+  height: 100%;
+}
+
+.chartBars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  flex: 1;
+  width: 100%;
+}
+
+.barTokens,
+.barCost {
+  width: 10px;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+}
+
+.barTokens {
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.barCost {
+  background: var(--dsw-alias-success-default, #00a870);
+}
+
+.chartLabel {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.empty {
+  padding: 16px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* 设置区 */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.subSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+}
+
+.subTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.okBadge {
+  color: var(--dsw-alias-success-default, #00a870);
+}
+
+.warnBadge {
+  color: var(--dsw-alias-warning-default, #ff9500);
+}
+
+.apiKeyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.apiKeyInput {
+  flex: 1;
+  min-width: 220px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}

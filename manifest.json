@@ -1,0 +1,56 @@
+{
+  "$schema": "https://deepseek.com/harness/schemas/plugin-manifest/v1.json",
+  "id": "deepseek-companion",
+  "name": "DeepSeek Companion",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化（开发者模式）、全局对话检索。",
+  "author": "DeepSeek Companion Contributors",
+  "license": "MIT",
+  "engine": {
+    "harness": ">=0.1.0",
+    "cordis": ">=4.0.0"
+  },
+  "entry": {
+    "host": "./lib/index.js",
+    "client": "./lib/client/index.js"
+  },
+  "modules": [
+    { "id": "export", "name": "对话智能导出", "optional": true, "defaultEnabled": true },
+    { "id": "handoff", "name": "上下文交接摘要", "optional": true, "defaultEnabled": true },
+    { "id": "cost", "name": "API 成本优化（开发者模式）", "optional": true, "defaultEnabled": true },
+    { "id": "search", "name": "全局对话检索", "optional": true, "defaultEnabled": true }
+  ],
+  "permissions": {
+    "network": {
+      "allowedOrigins": [
+        "https://api.deepseek.com",
+        "https://api-docs.deepseek.com",
+        "https://open.bigmodel.cn",
+        "https://platform.kimi.com",
+        "https://www.volcengine.com",
+        "https://bce.bdstatic.com"
+      ],
+      "note": "权限最小化：api.deepseek.com 用于模型调用；其余五家为动态计价引擎抓取的官方定价页（DeepSeek 官方文档站、智谱、Kimi、火山引擎豆包、百度文心 CDN），均为只读 GET，失败静默降级内置价格快照。"
+    },
+    "storage": {
+      "domains": ["companion"],
+      "note": "仅使用名为 companion 的存储域，数据保存在 Harness 插件沙箱本地。"
+    },
+    "services": [
+      "storageDomain",
+      "settings",
+      "credentials",
+      "sessionQuery",
+      "commands",
+      "systemPrompt",
+      "webServer",
+      "userQuestions"
+    ]
+  },
+  "privacy": {
+    "tracking": false,
+    "telemetry": false,
+    "dataResidency": "local",
+    "note": "插件不包含任何用户行为追踪或分析代码；对话内容与 API Key 仅存于本地沙箱。"
+  }
+}

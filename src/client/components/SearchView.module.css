@@ -1,0 +1,136 @@
+/* 全局检索视图页样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px;
+  overflow-y: auto;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 220px;
+}
+
+.dateField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.tagRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  cursor: pointer;
+}
+
+.tagActive {
+  cursor: pointer;
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+  color: var(--dsw-alias-text-inverse, #ffffff);
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.resultItem {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+  cursor: pointer;
+}
+
+.resultItem:hover {
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.resultHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resultTitle {
+  font-weight: 600;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.resultTime {
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.resultSnippet {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.resultTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.resultTag {
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.empty {
+  padding: 32px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.error {
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}

@@ -1,0 +1,117 @@
+/* 交接摘要对话框样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 480px;
+  max-width: 640px;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+  background: var(--dsw-alias-danger-bg, rgba(245, 74, 69, 0.08));
+}
+
+.summaryInput {
+  width: 100%;
+  min-height: 180px;
+  box-sizing: border-box;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+}
+
+.modelInfo {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-default, #dee0e3);
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.templateNameRow {
+  display: flex;
+  gap: 8px;
+}
+
+.templateNameInput {
+  flex: 1;
+}
+
+.templateList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.templateItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+}
+
+.templateMeta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.templateName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.templateTime {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.empty {
+  padding: 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+}
