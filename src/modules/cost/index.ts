@@ -276,7 +276,7 @@ export function apply(ctx: Context): void {
               sheet.fetchedAt !== undefined ? `（${new Date(sheet.fetchedAt).toLocaleString('zh-CN')}）` : ''
             }`,
           )
-          return { text: lines.join('\n') }
+          return { kind: 'success', text: lines.join('\n') }
         },
       }),
     'companion.cost-usage-command',

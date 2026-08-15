@@ -12,7 +12,6 @@
  * 所有注册均为 effect，随 Cordis fiber 生命周期自动回卷。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import Schema from '@deepseek-ai/schemastery'
 import type { ChatMessage } from '../../core/deepseek.js'
 import { HttpError, sendJson } from '../../core/http.js'
 import { SessionId } from '../../core/ids.js'
@@ -248,17 +247,17 @@ export function apply(ctx: Context): void {
       ctx.commands.register({
         name: 'handoff',
         description: '生成当前（或指定）会话的交接摘要',
-        input: Schema.string().description('会话 ID（缺省使用当前会话）'),
+        input: { hint: '会话 ID（缺省使用当前会话）' },
         handler: async (invocation) => {
-          const target = invocation.input?.trim() || invocation.sessionId
+          const target = invocation.rawInput.trim() || invocation.agent.id
           if (!target) {
-            return { error: '未指定会话：请提供会话 ID 或在会话内调用' }
+            return { kind: 'error', text: '未指定会话：请提供会话 ID 或在会话内调用' }
           }
           try {
             const result = await generate(SessionId(target))
-            return { text: result.summary, data: { model: result.model } }
+            return { kind: 'success', text: result.summary }
           } catch (error) {
-            return { error: error instanceof Error ? error.message : String(error) }
+            return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
           }
         },
       }),
@@ -270,18 +269,18 @@ export function apply(ctx: Context): void {
       ctx.commands.register({
         name: 'handoff-import',
         description: '导入交接摘要（输入为摘要全文），武装给下一个新对话',
-        input: Schema.string().description('交接摘要全文'),
+        input: { hint: '交接摘要全文' },
         handler: async (invocation) => {
-          const summary = invocation.input?.trim()
+          const summary = invocation.rawInput.trim()
           if (!summary) {
-            return { error: '请提供交接摘要全文作为命令输入' }
+            return { kind: 'error', text: '请提供交接摘要全文作为命令输入' }
           }
           try {
             const stores = await storesReady
             await stores.armed.arm(null, summary)
-            return { text: '交接摘要已武装：将注入下一个新对话的系统提示词。' }
+            return { kind: 'success', text: '交接摘要已武装：将注入下一个新对话的系统提示词。' }
           } catch (error) {
-            return { error: error instanceof Error ? error.message : String(error) }
+            return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
           }
         },
       }),

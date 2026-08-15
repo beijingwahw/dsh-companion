@@ -17,6 +17,7 @@
  * - user-questions:docs/subsystems/user-questions.md（ctx.userQuestions.ask）
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { RealDomainFacility } from '../core/storage-adapter.js'
 
 // ---------------------------------------------------------------------------
 // 品牌类型（Harness 约定：跨边界的不透明 id 一律品牌化，不用裸 string）
@@ -193,26 +194,34 @@ export interface CredentialProvider {
 // commands（ctx.commands）
 // ---------------------------------------------------------------------------
 
-export interface CommandInvocation {
-  readonly name: string
-  readonly input?: string
-  readonly args?: Readonly<Record<string, unknown>>
-  /** 调用来源会话（UI 侧注入；headless 场景可能缺省）。 */
-  readonly sessionId?: SessionId
-  readonly signal?: AbortSignal
+/** 命令输入提示描述符（真实 Harness 要求 { hint: string } 对象）。 */
+export interface CommandInputDescriptor {
+  readonly hint: string
 }
 
-export interface CommandResult {
-  readonly text?: string
-  readonly error?: string
-  readonly data?: unknown
+/** 传递给命令 handler 的调用对象（真实 Harness 形态）。 */
+export interface CommandInvocation {
+  /** 本次调用的配对 ID（写入 command/run 事件）。 */
+  readonly commandId: string
+  /** 接收命令的 agent 句柄；agent.id 即 SessionId。 */
+  readonly agent: { readonly id: SessionId }
+  /** 命令名之后的原始文本（含分隔空白）。 */
+  readonly rawInput: string
+  /** 派发方 UI 请求持有的取消信号。 */
+  readonly signal: AbortSignal
 }
+
+/** 命令 handler 的返回值（真实 Harness 形态）。 */
+export type CommandResult =
+  | { readonly kind: 'success'; readonly text?: string; readonly sourceEventSeq?: number }
+  | { readonly kind: 'error'; readonly text: string }
 
 export interface CommandDefinition {
   /** 小写、不带斜杠的命令名。 */
   readonly name: string
   readonly description: string
-  readonly input?: unknown
+  /** 可选输入提示（必须是 { hint: string } 对象，不能是纯字符串）。 */
+  readonly input?: CommandInputDescriptor
   readonly recordInput?: boolean
   readonly handler: (invocation: CommandInvocation) => CommandResult | Promise<CommandResult>
 }
@@ -296,7 +305,7 @@ export interface UserQuestionService {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    storageDomain: import('@deepseek-ai/dsh-storage').DomainFacility
+    storageDomain: RealDomainFacility
     settings: SettingsProvider
     credentials: CredentialProvider
     sessionQuery: SessionQueryEngine

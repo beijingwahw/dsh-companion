@@ -78,48 +78,48 @@ export function apply(ctx: Context): void {
 
       // 命令：导出当前/指定会话。
       ctx.commands.register({
-        name: 'export',
+        name: 'companion-export',
         description: '导出对话',
-        input: '<会话ID> [markdown|pdf|json]',
+        input: { hint: '<会话ID> [markdown|pdf|json]' },
         handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
           try {
             const { sessionId, options } = parseExportInput(
-              invocation.input,
-              invocation.sessionId,
+              invocation.rawInput,
+              invocation.agent.id,
             )
             const payload = await buildSingleExport(ctx.sessionQuery, sessionId, options)
             const text =
               payload.kind === 'file'
                 ? `导出完成：${payload.fileName}`
                 : `内容包含宽字符（如中文），已生成打印页 ${payload.fileName}，请在浏览器打印对话框中另存为 PDF`
-            return { text, data: payload }
+            return { kind: 'success', text }
           } catch (error) {
-            return { text: userFacingMessage(error, '导出失败，请稍后重试') }
+            return { kind: 'error', text: userFacingMessage(error, '导出失败，请稍后重试') }
           }
         },
       }),
 
       // 命令：批量导出为 ZIP。
       ctx.commands.register({
-        name: 'export-batch',
+        name: 'companion-export-batch',
         description: '批量导出为 ZIP',
-        input: '<会话ID1>,<会话ID2>,…',
+        input: { hint: '<会话ID1>,<会话ID2>,…' },
         handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
           try {
-            const sessionIds = (invocation.input ?? '')
+            const sessionIds = (invocation.rawInput ?? '')
               .split(',')
               .map((part) => part.trim())
               .filter((part) => part.length > 0)
               .map((part) => SessionId(part))
             if (sessionIds.length === 0) {
-              return { text: '请提供要导出的会话 ID（逗号分隔）' }
+              return { kind: 'error', text: '请提供要导出的会话 ID（逗号分隔）' }
             }
             const payload = await buildBatchExport(ctx.sessionQuery, sessionIds, {
               format: 'markdown',
             })
-            return { text: `批量导出完成：${payload.fileName}`, data: payload }
+            return { kind: 'success', text: `批量导出完成：${payload.fileName}` }
           } catch (error) {
-            return { text: userFacingMessage(error, '批量导出失败，请稍后重试') }
+            return { kind: 'error', text: userFacingMessage(error, '批量导出失败，请稍后重试') }
           }
         },
       }),
@@ -192,9 +192,9 @@ function parseBatchBody(body: unknown): { sessionIds: SessionId[]; options: Expo
 }
 
 /**
- * 解析 export 命令输入：“<会话ID> [markdown|pdf|json]”。
+ * 解析 export 命令输入："<会话ID> [markdown|pdf|json]"。
  * 单个 token 且为合法格式时视为格式（会话取调用来源会话）；
- * 缺省会话时回退 invocation.sessionId；格式缺省 markdown。
+ * 缺省会话时回退 invocation.agent.id；格式缺省 markdown。
  */
 function parseExportInput(
   input: string | undefined,

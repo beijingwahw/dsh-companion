@@ -28,15 +28,18 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-storage-domain": ">=0.0.1-0",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-storage-domain": ">=0.0.1-0",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.0",
     "react": "^18.3.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "zod": "^4.4.3"
   },
   "dsh": {
     "bundle": {

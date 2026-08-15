@@ -8,7 +8,7 @@
  *   策略层（路由/调度/预算）由成本模块的 companionCost 服务包装。
  */
 import { Service, type Context } from '@deepseek-ai/cordis'
-import { defineDomain, type Domain } from '@deepseek-ai/dsh-storage'
+import { defineDomain, wrapFacility, type Domain, type DomainFacility as PluginDomainFacility } from './storage-adapter.js'
 import type { Config } from '../config.js'
 import {
   chatCompletion,
@@ -50,9 +50,21 @@ export interface CallParams {
   model?: string
   temperature?: number
   maxTokens?: number
+  /** 开启 JSON 输出模式（response_format: json_object）。 */
+  jsonMode?: boolean
   signal?: AbortSignal
   /** 调用方标识（如 handoff / cost-report），用于记账聚合。 */
   source: string
+}
+
+/**
+ * API 调用钩子（安全模块 J 的集成点）：
+ * - beforeCall 抛错即拦截本次调用（如 DLP 严格模式、Key 权限范围越界）；
+ * - afterCall 在调用结束后（无论成败）best-effort 执行，用于审计记录。
+ */
+export interface CallHook {
+  beforeCall?(params: CallParams): void | Promise<void>
+  afterCall?(params: CallParams, result: ChatResult | undefined, error: Error | undefined, costCny: number): void
 }
 
 /** ctx.companion 服务契约。 */
@@ -78,6 +90,8 @@ export interface CompanionCore {
   setPricingOverrides(table: PriceTable): void
   /** 发出 companion/notice（UI 层呈现为 Toast）。 */
   notice(kind: 'info' | 'success' | 'warning' | 'error', message: string): void
+  /** 注册 API 调用钩子（DLP 拦截 + 审计采集）；返回注销 disposer。 */
+  addCallHook(hook: CallHook): () => void
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -87,10 +101,17 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export class CompanionCoreService extends Service implements CompanionCore {
+  /** 依赖服务：HTTP 路由宿主、存储域设施、凭据解析。 */
+  static inject = ['webServer', 'storageDomain', 'credentials']
+
   readonly http: CompanionRouter = createRouter('/companion')
   readonly prices: PriceService
   /** 内部存储域初始化 promise；失败后被重置，下次访问 ready 时重试 open。 */
   private readyPromise?: Promise<CompanionStore>
+  /** 经适配层包装的存储设施（懒初始化）。 */
+  private storageFacility?: PluginDomainFacility
+  /** API 调用钩子集合（安全模块注入）。 */
+  private readonly callHooks = new Set<CallHook>()
 
   constructor(
     readonly ctx: Context,
@@ -109,12 +130,14 @@ export class CompanionCoreService extends Service implements CompanionCore {
 
     // 私有 HTTP 前缀路由：各模块经 ctx.companion.http 挂载端点。
     ctx.effect(
-      () =>
-        ctx.webServer.register({
+      () => {
+        const dispose = ctx.webServer.register({
           kind: 'prefix',
           path: '/companion',
           handler: (req, res) => this.http.handle(req, res),
-        }),
+        })
+        return dispose
+      },
       'companion.http-route',
     )
 
@@ -130,7 +153,8 @@ export class CompanionCoreService extends Service implements CompanionCore {
   /** 懒性创建（或复用）存储域初始化 promise，并为其挂兜底 catch。 */
   private ensureReady(): Promise<CompanionStore> {
     if (!this.readyPromise) {
-      const promise = this.ctx.storageDomain.open(COMPANION_DOMAIN).then((domain) => ({
+      this.storageFacility ??= wrapFacility(this.ctx.storageDomain)
+      const promise = this.storageFacility.open(COMPANION_DOMAIN).then((domain) => ({
         domain,
         vault: new SecretVault(domain),
         usage: new UsageStore(domain),
@@ -177,6 +201,10 @@ export class CompanionCoreService extends Service implements CompanionCore {
   }
 
   async callDeepSeek(params: CallParams): Promise<ChatResult> {
+    // 前置钩子（DLP 拦截 / Key 权限校验）：任一抛错即中止调用。
+    for (const hook of this.callHooks) {
+      await hook.beforeCall?.(params)
+    }
     const apiKey = await this.getApiKey()
     if (!apiKey) {
       throw new DeepSeekApiError(
@@ -185,16 +213,24 @@ export class CompanionCoreService extends Service implements CompanionCore {
       )
     }
     const requestedModel = params.model ?? 'deepseek-chat'
-    const result = await chatCompletion({
-      baseUrl: this.config.apiBaseUrl,
-      apiKey,
-      timeoutMs: this.config.apiTimeoutMs,
-      model: requestedModel,
-      messages: params.messages,
-      temperature: params.temperature,
-      maxTokens: params.maxTokens,
-      signal: params.signal,
-    })
+    let result: ChatResult
+    try {
+      result = await chatCompletion({
+        baseUrl: this.config.apiBaseUrl,
+        apiKey,
+        timeoutMs: this.config.apiTimeoutMs,
+        model: requestedModel,
+        messages: params.messages,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
+        jsonMode: params.jsonMode,
+        signal: params.signal,
+      })
+    } catch (error) {
+      // 失败路径同样通知后置钩子（审计需要记录失败调用）。
+      this.runAfterCallHooks(params, undefined, error instanceof Error ? error : new Error(String(error)), 0)
+      throw error
+    }
     const model = result.model || requestedModel
     // 记账与事件发射是 best-effort：失败降级为 warning 提示，不影响调用结果的返回。
     // usage.record 与事件复用同一个 ts，保证两侧时间一致；
@@ -225,6 +261,7 @@ export class CompanionCoreService extends Service implements CompanionCore {
         `用量记账失败（本次调用结果不受影响）：${error instanceof Error ? error.message : String(error)}`,
       )
     }
+    this.runAfterCallHooks(params, result, undefined, costCny)
     return result
   }
 
@@ -234,5 +271,28 @@ export class CompanionCoreService extends Service implements CompanionCore {
 
   notice(kind: 'info' | 'success' | 'warning' | 'error', message: string): void {
     this.ctx.emit('companion/notice', { kind, message })
+  }
+
+  addCallHook(hook: CallHook): () => void {
+    this.callHooks.add(hook)
+    return () => {
+      this.callHooks.delete(hook)
+    }
+  }
+
+  /** 后置钩子统一出口：单个钩子抛错不影响其余钩子与调用结果。 */
+  private runAfterCallHooks(
+    params: CallParams,
+    result: ChatResult | undefined,
+    error: Error | undefined,
+    costCny: number,
+  ): void {
+    for (const hook of this.callHooks) {
+      try {
+        hook.afterCall?.(params, result, error, costCny)
+      } catch {
+        // 审计钩子失败静默，不影响主流程。
+      }
+    }
   }
 }

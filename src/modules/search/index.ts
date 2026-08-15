@@ -82,16 +82,16 @@ export function apply(ctx: Context): void {
           ctx.commands.register({
             name: 'search',
             description: '检索历史对话',
-            input: '<检索词>',
+            input: { hint: '<检索词>' },
             handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
-              const query = (invocation.input ?? '').trim()
-              if (query.length === 0) return { text: '请输入检索词' }
+              const query = (invocation.rawInput ?? '').trim()
+              if (query.length === 0) return { kind: 'error', text: '请输入检索词' }
               try {
                 const hits = await searchSessions(
                   { sessionQuery: ctx.sessionQuery, tagStore },
                   { query },
                 )
-                if (hits.length === 0) return { text: `未找到与“${query}”匹配的对话` }
+                if (hits.length === 0) return { kind: 'success', text: `未找到与“${query}”匹配的对话` }
                 const lines: string[] = [`共找到 ${hits.length} 个对话：`]
                 let index = 1
                 for (const hit of hits) {
@@ -102,9 +102,9 @@ export function apply(ctx: Context): void {
                   if (hit.tags.length > 0) lines.push(`   标签: ${hit.tags.join('、')}`)
                   index += 1
                 }
-                return { text: lines.join('\n'), data: { hits } }
+                return { kind: 'success', text: lines.join('\n') }
               } catch {
-                return { text: '检索失败，请稍后重试' }
+                return { kind: 'error', text: '检索失败，请稍后重试' }
               }
             },
           }),
@@ -113,14 +113,14 @@ export function apply(ctx: Context): void {
           ctx.commands.register({
             name: 'tag',
             description: '为会话增删标签',
-            input: '<会话ID> +标签1 -标签2',
+            input: { hint: '<会话ID> +标签1 -标签2' },
             handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
-              const tokens = (invocation.input ?? '')
+              const tokens = (invocation.rawInput ?? '')
                 .split(/\s+/)
                 .map((token) => token.trim())
                 .filter((token) => token.length > 0)
               if (tokens.length < 2) {
-                return { text: '用法：tag <会话ID> +标签1 -标签2（+ 添加，- 移除）' }
+                return { kind: 'error', text: '用法：tag <会话ID> +标签1 -标签2（+ 添加，- 移除）' }
               }
               const sessionId = SessionId(tokens[0])
               const add: string[] = []
@@ -133,7 +133,7 @@ export function apply(ctx: Context): void {
                   const tag = token.slice(1).trim()
                   if (tag.length > 0) remove.push(tag)
                 } else {
-                  return { text: `无法解析标签参数“${token}”，请使用 +标签/-标签 形式` }
+                  return { kind: 'error', text: `无法解析标签参数“${token}”，请使用 +标签/-标签 形式` }
                 }
               }
               try {
@@ -142,9 +142,9 @@ export function apply(ctx: Context): void {
                   tags.length > 0
                     ? `会话 ${sessionId} 的标签已更新：${tags.join('、')}`
                     : `会话 ${sessionId} 的标签已清空`
-                return { text, data: { tags } }
+                return { kind: 'success', text }
               } catch {
-                return { text: '更新标签失败，请稍后重试' }
+                return { kind: 'error', text: '更新标签失败，请稍后重试' }
               }
             },
           }),
