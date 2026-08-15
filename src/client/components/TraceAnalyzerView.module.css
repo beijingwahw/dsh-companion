@@ -1,0 +1,237 @@
+/* 执行轨迹分析器视图样式（CSS Modules + --dsw-alias-* 语义令牌）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  color: var(--dsw-alias-fg-primary, #1f2328);
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-danger-subtle, #ffebe9);
+  color: var(--dsw-alias-fg-danger, #cf222e);
+  font-size: 13px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--dsw-alias-border-primary, #d0d7de);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.section h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sortBar {
+  display: flex;
+  gap: 6px;
+}
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.statCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+}
+
+.statValue {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.statLabel {
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.anomalyList {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.anomalyItem {
+  font-size: 13px;
+  color: var(--dsw-alias-fg-danger, #cf222e);
+}
+
+.empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.timelineRow {
+  display: grid;
+  grid-template-columns: 160px 1fr 180px;
+  align-items: center;
+  gap: 8px;
+}
+
+.timelineName {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timelineTrack {
+  position: relative;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+}
+
+.timelineBar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  background: var(--dsw-alias-accent-primary, #0969da);
+  cursor: help;
+}
+
+.kind_tool {
+  background: var(--dsw-alias-accent-secondary, #8250df);
+}
+
+.kind_agent {
+  background: var(--dsw-alias-accent-warning, #9a6700);
+}
+
+.kind_model {
+  background: var(--dsw-alias-accent-primary, #0969da);
+}
+
+.kind_step {
+  background: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.anomaly {
+  background: var(--dsw-alias-fg-danger, #cf222e) !important;
+}
+
+.statusError {
+  outline: 2px solid var(--dsw-alias-fg-danger, #cf222e);
+}
+
+.timelineMeta {
+  font-size: 11px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+  white-space: nowrap;
+}
+
+.diffTable {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.diffTable th,
+.diffTable td {
+  border: 1px solid var(--dsw-alias-border-primary, #d0d7de);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.diffTable th {
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+}
+
+.diff_added {
+  color: var(--dsw-alias-fg-success, #1a7f37);
+  font-weight: 600;
+}
+
+.diff_removed {
+  color: var(--dsw-alias-fg-danger, #cf222e);
+  font-weight: 600;
+}
+
+.diff_changed {
+  color: var(--dsw-alias-fg-warning, #9a6700);
+  font-weight: 600;
+}
+
+.diff_same {
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 120px;
+}
+
+.trendCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  cursor: help;
+}
+
+.trendBar {
+  width: 100%;
+  border-radius: 3px 3px 0 0;
+  background: var(--dsw-alias-accent-primary, #0969da);
+}
+
+.trendLabel {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.baseline {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}

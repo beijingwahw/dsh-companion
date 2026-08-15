@@ -595,6 +595,881 @@ export function updateSessionTags(request: UpdateTagsRequest): Promise<SessionTa
 }
 
 // ---------------------------------------------------------------------------
+// 模块 E：执行轨迹分析器（/trace/*）
+// ---------------------------------------------------------------------------
+
+/** 轨迹节点（客户端视角）。 */
+export interface TraceNode {
+  readonly id: string
+  readonly name: string
+  readonly kind: 'step' | 'tool' | 'agent' | 'model'
+  readonly startMs: number
+  readonly endMs: number
+  readonly durationMs: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly model?: string
+  readonly cacheHit: boolean
+  readonly status: 'ok' | 'error' | 'retry'
+  readonly attempts: number
+  readonly parentId?: string
+}
+
+/** 一条完整执行轨迹。 */
+export interface Trace {
+  readonly id: string
+  readonly sessionId?: string
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly nodes: readonly TraceNode[]
+}
+
+/** 轨迹异常标注。 */
+export interface TraceAnomaly {
+  readonly kind: 'retry-loop' | 'token-explosion' | 'cache-miss' | 'infinite-loop'
+  readonly nodeIds: readonly string[]
+  readonly reason: string
+  readonly suggestion: string
+  readonly severity: 1 | 2 | 3
+}
+
+/** 轨迹汇总指标。 */
+export interface TraceStats {
+  readonly totalDurationMs: number
+  readonly totalInputTokens: number
+  readonly totalOutputTokens: number
+  readonly cacheHitRate: number
+  readonly toolSuccessRate: number
+  readonly agentDispatches: number
+  readonly nodeCount: number
+}
+
+/** 轨迹对比差异条目。 */
+export interface TraceDiffEntry {
+  readonly name: string
+  readonly change: 'added' | 'removed' | 'changed' | 'same'
+  readonly oldDurationMs?: number
+  readonly newDurationMs?: number
+  readonly durationDeltaMs?: number
+  readonly oldTokens?: number
+  readonly newTokens?: number
+  readonly tokenDelta?: number
+}
+
+/** 轨迹日聚合统计。 */
+export interface TraceDailyStats {
+  readonly day: string
+  readonly traceCount: number
+  readonly totalDurationMs: number
+  readonly totalInputTokens: number
+  readonly totalOutputTokens: number
+  readonly cacheHits: number
+  readonly modelCalls: number
+  readonly toolCalls: number
+  readonly toolSuccess: number
+  readonly agentDispatches: number
+  readonly anomalyCount: number
+}
+
+/** `GET /trace/derive` 与 `GET /trace/get` 响应。 */
+export interface TraceAnalysisResponse {
+  readonly trace: Trace
+  readonly anomalies: readonly TraceAnomaly[]
+  readonly stats: TraceStats
+  readonly slowest?: readonly TraceNode[]
+  readonly costliest?: readonly TraceNode[]
+}
+
+/** `GET /trace/stats` 响应。 */
+export interface TraceStatsResponse {
+  readonly days: readonly TraceDailyStats[]
+  readonly baseline?: {
+    readonly avgDurationMs: number
+    readonly avgTokens: number
+    readonly avgAnomalies: number
+  }
+}
+
+/** `POST /trace/diff` 响应（json 形态）。 */
+export interface TraceDiffJsonResponse {
+  readonly format: 'json'
+  readonly entries: readonly TraceDiffEntry[]
+}
+
+/** `POST /trace/diff` 响应（html 形态）。 */
+export interface TraceDiffHtmlResponse {
+  readonly format: 'html'
+  readonly fileName: string
+  readonly html: string
+}
+
+/** 从会话日志派生并分析轨迹。 */
+export function deriveTrace(sessionId: string, options?: RequestOptions): Promise<TraceAnalysisResponse> {
+  return companionGet<TraceAnalysisResponse>('/trace/derive', { sessionId }, options)
+}
+
+/** 列出可分析的会话。 */
+export function fetchTraceSessions(options?: RequestOptions): Promise<ExportSessionsResponse> {
+  return companionGet<ExportSessionsResponse>('/trace/sessions', undefined, options)
+}
+
+/** 对比两条轨迹（format 缺省返回 json；'html' 返回自包含对比报告）。 */
+export function diffTraces(
+  request: {
+    old: { id?: string; sessionId?: string }
+    new: { id?: string; sessionId?: string }
+    format?: 'json' | 'html'
+  },
+  options?: RequestOptions,
+): Promise<TraceDiffJsonResponse | TraceDiffHtmlResponse> {
+  return companionPost<TraceDiffJsonResponse | TraceDiffHtmlResponse>('/trace/diff', request, options)
+}
+
+/** 读取轨迹日聚合趋势与历史基准线。 */
+export function fetchTraceStats(
+  range: { from: string; to: string },
+  options?: RequestOptions,
+): Promise<TraceStatsResponse> {
+  return companionGet<TraceStatsResponse>('/trace/stats', { from: range.from, to: range.to }, options)
+}
+
+/** 摄入 Harness 原生轨迹 JSON。 */
+export function ingestTrace(
+  request: { id?: string; trace: unknown },
+  options?: RequestOptions,
+): Promise<TraceAnalysisResponse> {
+  return companionPost<TraceAnalysisResponse>('/trace/ingest', request, options)
+}
+
+// ---------------------------------------------------------------------------
+// 模块 F：Prompt 工程工作台（/prompt/*）
+// ---------------------------------------------------------------------------
+
+/** Prompt 版本记录。 */
+export interface PromptVersion {
+  readonly version: number
+  readonly content: string
+  readonly note: string
+  readonly tags: readonly string[]
+  readonly createdAt: number
+}
+
+/** Prompt 模板。 */
+export interface PromptTemplate {
+  readonly name: string
+  readonly category: string
+  readonly content: string
+  readonly builtin: boolean
+  readonly updatedAt: number
+  readonly variables: readonly string[]
+}
+
+/** A/B 单条运行结果。 */
+export interface AbTestRunResult {
+  readonly caseIndex: number
+  readonly input: string
+  readonly ok: boolean
+  readonly output: string
+  readonly latencyMs: number
+  readonly promptTokens: number
+  readonly completionTokens: number
+  readonly error?: string
+}
+
+/** A/B 汇总指标。 */
+export interface AbTestSummary {
+  readonly successRate: number
+  readonly avgOutputLength: number
+  readonly avgLatencyMs: number
+  readonly totalTokens: number
+}
+
+/** 胜率统计。 */
+export interface PromptRatings {
+  readonly total: number
+  readonly winsA: number
+  readonly winsB: number
+  readonly ties: number
+}
+
+/** `POST /prompt/ab-test` 响应。 */
+export interface AbTestResponse {
+  readonly model: string
+  readonly a: {
+    readonly prompt: string
+    readonly results: readonly AbTestRunResult[]
+    readonly summary: AbTestSummary
+  }
+  readonly b: {
+    readonly prompt: string
+    readonly results: readonly AbTestRunResult[]
+    readonly summary: AbTestSummary
+  }
+  readonly ratings: PromptRatings
+}
+
+/** F4 单条校验运行。 */
+export interface ValidateRun {
+  readonly caseIndex: number
+  readonly input: string
+  readonly ok: boolean
+  readonly output: string
+  readonly violations: readonly { readonly path: string; readonly message: string }[]
+  readonly latencyMs: number
+  readonly tokens: number
+  readonly error?: string
+}
+
+/** `POST /prompt/validate` 响应。 */
+export interface ValidateResponse {
+  readonly model: string
+  readonly total: number
+  readonly compliant: number
+  readonly complianceRate: number
+  readonly runs: readonly ValidateRun[]
+}
+
+/** 读取 Prompt 版本历史。 */
+export function fetchPromptVersions(options?: RequestOptions): Promise<{ versions: readonly PromptVersion[] }> {
+  return companionGet<{ versions: readonly PromptVersion[] }>('/prompt/versions', undefined, options)
+}
+
+/** 保存新 Prompt 版本。 */
+export function savePromptVersion(request: {
+  content: string
+  note?: string
+  tags?: readonly string[]
+}): Promise<{ version: PromptVersion }> {
+  return companionPost<{ version: PromptVersion }>('/prompt/versions', request)
+}
+
+/** 回滚到指定版本。 */
+export function rollbackPromptVersion(request: { version: number; note?: string }): Promise<{ version: PromptVersion }> {
+  return companionPost<{ version: PromptVersion }>('/prompt/rollback', request)
+}
+
+/** 为版本增删标签。 */
+export function updatePromptTags(request: {
+  version: number
+  add?: readonly string[]
+  remove?: readonly string[]
+}): Promise<{ version: PromptVersion }> {
+  return companionPost<{ version: PromptVersion }>('/prompt/tags', request)
+}
+
+/** 运行 A/B 测试。 */
+export function runAbTest(
+  request: { promptA: string; promptB: string; cases?: readonly string[]; model?: string },
+  options?: RequestOptions,
+): Promise<AbTestResponse> {
+  return companionPost<AbTestResponse>('/prompt/ab-test', request, options)
+}
+
+/** 提交人工评分。 */
+export function rateAbTest(request: {
+  winner: 'A' | 'B' | 'tie'
+  promptA?: string
+  promptB?: string
+}): Promise<{ ok: true; ratings: PromptRatings }> {
+  return companionPost<{ ok: true; ratings: PromptRatings }>('/prompt/rate', request)
+}
+
+/** 读取模板库。 */
+export function fetchPromptTemplates(options?: RequestOptions): Promise<{ templates: readonly PromptTemplate[] }> {
+  return companionGet<{ templates: readonly PromptTemplate[] }>('/prompt/templates', undefined, options)
+}
+
+/** 保存模板。 */
+export function savePromptTemplate(request: { name: string; category?: string; content: string }): Promise<OkResponse> {
+  return companionPost<OkResponse>('/prompt/templates', request)
+}
+
+/** 删除模板。 */
+export function deletePromptTemplate(name: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/prompt/templates', { name })
+}
+
+/** 变量插值渲染。 */
+export function renderPromptTemplate(request: {
+  template: string
+  variables?: Readonly<Record<string, string>>
+}): Promise<{ rendered: string }> {
+  return companionPost<{ rendered: string }>('/prompt/render', request)
+}
+
+/** 生成 API 调用代码。 */
+export function generateApiCode(request: {
+  prompt: string
+  language: 'python' | 'nodejs' | 'curl'
+  model?: string
+}): Promise<{ code: string }> {
+  return companionPost<{ code: string }>('/prompt/codegen', request)
+}
+
+/** 结构化输出批量校验。 */
+export function validateStructuredOutput(
+  request: { prompt: string; schema: string; cases?: readonly string[]; model?: string },
+  options?: RequestOptions,
+): Promise<ValidateResponse> {
+  return companionPost<ValidateResponse>('/prompt/validate', request, options)
+}
+
+// ---------------------------------------------------------------------------
+// 模块 G：多模型竞技场（/arena/*）
+// ---------------------------------------------------------------------------
+
+/** 竞技场模型目录条目。 */
+export interface ArenaModelInfo {
+  readonly id: string
+  readonly label: string
+  readonly provider: 'deepseek' | 'external'
+  readonly latencyTier: 'fast' | 'balanced' | 'slow'
+  readonly accuracyPrior: Readonly<Record<string, number>>
+  /** 外部厂商 Key 是否已配置（deepseek 模型为 undefined）。 */
+  readonly keyConfigured?: boolean
+}
+
+/** G1 单模型运行结果。 */
+export interface ArenaRunResult {
+  readonly model: string
+  readonly ok: boolean
+  readonly output: string
+  readonly latencyMs: number
+  readonly promptTokens: number
+  readonly completionTokens: number
+  readonly costCny: number
+  readonly error?: string
+}
+
+/** G2 排行榜行。 */
+export interface ArenaLeaderboardRow {
+  readonly model: string
+  readonly successRate: number
+  readonly accuracy: number | null
+  readonly p50Ms: number
+  readonly p95Ms: number
+  readonly p99Ms: number
+  readonly avgTokens: number
+  readonly costPerTaskCny: number
+  readonly complianceRate: number | null
+  readonly compositeScore: number
+}
+
+/** G3 推荐条目。 */
+export interface ArenaRecommendation {
+  readonly model: string
+  readonly label: string
+  readonly score: number
+  readonly reason: string
+  readonly estimatedCostCny: number
+}
+
+/** 读取模型目录。 */
+export function fetchArenaModels(options?: RequestOptions): Promise<{ models: readonly ArenaModelInfo[] }> {
+  return companionGet<{ models: readonly ArenaModelInfo[] }>('/arena/models', undefined, options)
+}
+
+/** 保存外部厂商 API Key（服务端加密落盘）。 */
+export function saveArenaKey(request: { modelId: string; apiKey: string; baseUrl?: string }): Promise<OkResponse> {
+  return companionPost<OkResponse>('/arena/keys', request)
+}
+
+/** 删除外部厂商 API Key。 */
+export function removeArenaKey(modelId: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/arena/keys', { modelId })
+}
+
+/** G1 同 Prompt 多模型并行对比。 */
+export function runArenaCompare(
+  request: { prompt: string; models: readonly string[] },
+  options?: RequestOptions,
+): Promise<{ prompt: string; results: readonly ArenaRunResult[] }> {
+  return companionPost<{ prompt: string; results: readonly ArenaRunResult[] }>('/arena/compare', request, options)
+}
+
+/** G2 批量评测排行榜（format 缺省返回 json；useCache=true 时导出复用最近评测结果，不重跑）。 */
+export function runArenaLeaderboard(
+  request: {
+    models?: readonly string[]
+    cases?: readonly unknown[] | string
+    format?: 'markdown' | 'html'
+    useCache?: boolean
+  },
+  options?: RequestOptions,
+): Promise<
+  | { format: 'json'; rows: readonly ArenaLeaderboardRow[] }
+  | { format: 'markdown' | 'html'; fileName: string; content: string }
+> {
+  return companionPost('/arena/leaderboard', request, options)
+}
+
+/** G3 模型推荐。 */
+export function fetchArenaRecommendation(
+  params: { taskType?: string; budgetPerCallCny?: number; latency?: string },
+  options?: RequestOptions,
+): Promise<{
+  taskType: string
+  taskTypeLabel: string
+  recommendations: readonly ArenaRecommendation[]
+}> {
+  return companionGet('/arena/recommend', params, options)
+}
+
+// ---------------------------------------------------------------------------
+// 模块 H：断点续跑与任务编排（/orchestrator/*）
+// ---------------------------------------------------------------------------
+
+/** 流水线步骤定义（H1）。 */
+export interface OrchestratorStep {
+  readonly id: string
+  readonly name: string
+  readonly model: string
+  readonly prompt: string
+  readonly inputFrom: 'prev' | 'literal'
+  readonly input: string
+  readonly condition: string
+  readonly timeoutMs: number
+  readonly maxRetries: number
+  readonly retryIntervalMs: number
+  readonly dependsOn: readonly string[]
+}
+
+/** 流水线定义（H1）。 */
+export interface OrchestratorPipeline {
+  readonly id: string
+  readonly name: string
+  readonly steps: readonly OrchestratorStep[]
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/** 单步运行记录（H2）。 */
+export interface OrchestratorStepRun {
+  readonly stepId: string
+  readonly status: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+  readonly attempts: number
+  readonly output: string
+  readonly error: string
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly latencyMs: number
+  readonly tokens: number
+}
+
+/** 一次流水线执行（H2 断点续跑单元）。 */
+export interface OrchestratorRun {
+  readonly id: string
+  readonly pipelineId: string
+  readonly status: 'running' | 'done' | 'failed' | 'paused' | 'cancelled'
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly steps: Readonly<Record<string, OrchestratorStepRun>>
+  readonly message: string
+}
+
+/** 执行列表摘要（GET /orchestrator/runs）。 */
+export interface OrchestratorRunSummary {
+  readonly id: string
+  readonly pipelineId: string
+  readonly status: OrchestratorRun['status']
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly message: string
+  readonly progress: { readonly done: number; readonly total: number }
+}
+
+/** 队列任务（H3）。 */
+export interface OrchestratorQueueTask {
+  readonly id: string
+  readonly name: string
+  readonly prompt: string
+  readonly model: string
+  readonly priority: 'high' | 'medium' | 'low'
+  readonly deadline: number
+  readonly failurePolicy: 'skip' | 'retry' | 'notify'
+  readonly status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'paused'
+  readonly createdAt: number
+  readonly finishedAt: number
+  readonly output: string
+  readonly error: string
+  readonly attempts: number
+}
+
+/** 队列状态计数。 */
+export type OrchestratorQueueCounts = Readonly<Record<string, number>>
+
+/** 定时任务（H4）。 */
+export interface OrchestratorJob {
+  readonly id: string
+  readonly name: string
+  readonly cron: string
+  readonly scheduleText: string
+  readonly prompt: string
+  readonly model: string
+  readonly offPeakOnly: boolean
+  readonly enabled: boolean
+  readonly createdAt: number
+  readonly lastRunAt: number
+  readonly nextRunAt: number
+}
+
+/** 定时任务执行归档（H4）。 */
+export interface OrchestratorJobRun {
+  readonly id: string
+  readonly jobId: string
+  readonly ts: number
+  readonly ok: boolean
+  readonly output: string
+  readonly error: string
+  readonly latencyMs: number
+}
+
+/** 列出全部流水线。 */
+export function fetchPipelines(options?: RequestOptions): Promise<{ pipelines: readonly OrchestratorPipeline[] }> {
+  return companionGet<{ pipelines: readonly OrchestratorPipeline[] }>('/orchestrator/pipelines', undefined, options)
+}
+
+/** 创建或更新流水线（携带 id 为更新）。 */
+export function savePipeline(
+  request: { id?: string; name: string; steps: readonly Partial<OrchestratorStep>[] },
+  options?: RequestOptions,
+): Promise<{ pipeline: OrchestratorPipeline }> {
+  return companionPost<{ pipeline: OrchestratorPipeline }>('/orchestrator/pipelines', request, options)
+}
+
+/** 删除流水线。 */
+export function deletePipeline(id: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/orchestrator/pipelines', { id })
+}
+
+/** 读取流水线自动生成的 YAML 配置。 */
+export function fetchPipelineYaml(id: string, options?: RequestOptions): Promise<{ id: string; yaml: string }> {
+  return companionGet<{ id: string; yaml: string }>('/orchestrator/pipelines/yaml', { id }, options)
+}
+
+/** 启动一次执行（后台异步，立即返回 runId）。 */
+export function startPipelineRun(
+  pipelineId: string,
+  options?: RequestOptions,
+): Promise<{ runId: string; status: OrchestratorRun['status'] }> {
+  return companionPost('/orchestrator/runs', { pipelineId }, options)
+}
+
+/** 断点续跑：从最后成功步骤继续。 */
+export function resumePipelineRun(
+  runId: string,
+  options?: RequestOptions,
+): Promise<{ runId: string; status: OrchestratorRun['status'] }> {
+  return companionPost('/orchestrator/runs/resume', { runId }, options)
+}
+
+/** 暂停执行。 */
+export function pausePipelineRun(runId: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/orchestrator/runs/pause', { runId })
+}
+
+/** 取消执行。 */
+export function cancelPipelineRun(runId: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/orchestrator/runs/cancel', { runId })
+}
+
+/** 列出执行记录（可按流水线过滤）。 */
+export function fetchPipelineRuns(
+  pipelineId?: string,
+  options?: RequestOptions,
+): Promise<{ runs: readonly OrchestratorRunSummary[] }> {
+  return companionGet<{ runs: readonly OrchestratorRunSummary[] }>('/orchestrator/runs', { pipelineId }, options)
+}
+
+/** 读取单次执行详情（含各步骤中间结果）。 */
+export function fetchPipelineRun(id: string, options?: RequestOptions): Promise<{ run: OrchestratorRun }> {
+  return companionGet<{ run: OrchestratorRun }>('/orchestrator/runs/get', { id }, options)
+}
+
+/** 删除执行记录。 */
+export function deletePipelineRun(id: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/orchestrator/runs', { id })
+}
+
+/** 读取批量队列（任务列表 + 计数）。 */
+export function fetchQueue(options?: RequestOptions): Promise<{
+  tasks: readonly OrchestratorQueueTask[]
+  counts: OrchestratorQueueCounts
+}> {
+  return companionGet('/orchestrator/queue', undefined, options)
+}
+
+/** 提交批量任务。 */
+export function submitQueueTask(
+  request: {
+    name: string
+    prompt: string
+    model?: string
+    priority?: 'high' | 'medium' | 'low'
+    deadline?: number
+    failurePolicy?: 'skip' | 'retry' | 'notify'
+  },
+  options?: RequestOptions,
+): Promise<{ task: OrchestratorQueueTask }> {
+  return companionPost('/orchestrator/queue', request, options)
+}
+
+/** 取消队列任务。 */
+export function cancelQueueTask(id: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/orchestrator/queue/cancel', { id })
+}
+
+/** 暂停排队中的任务。 */
+export function pauseQueueTask(id: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/orchestrator/queue/pause', { id })
+}
+
+/** 恢复已暂停的任务。 */
+export function resumeQueueTask(id: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/orchestrator/queue/resume', { id })
+}
+
+/** 批量操作队列（pause/resume/cancel 全部可操作任务）。 */
+export function batchQueue(action: 'pause' | 'resume' | 'cancel'): Promise<{ ok: true; changed: number }> {
+  return companionPost('/orchestrator/queue/batch', { action })
+}
+
+/** 删除队列任务记录。 */
+export function deleteQueueTask(id: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/orchestrator/queue', { id })
+}
+
+/** 列出定时任务。 */
+export function fetchJobs(options?: RequestOptions): Promise<{ jobs: readonly OrchestratorJob[] }> {
+  return companionGet<{ jobs: readonly OrchestratorJob[] }>('/orchestrator/jobs', undefined, options)
+}
+
+/** 自然语言/Cron 解析预检。 */
+export function parseSchedule(
+  text: string,
+  options?: RequestOptions,
+): Promise<{ cron: string; nextRunAt: number }> {
+  return companionPost('/orchestrator/parse-schedule', { text }, options)
+}
+
+/** 创建或更新定时任务（携带 id 为更新）。 */
+export function saveJob(
+  request: {
+    id?: string
+    name: string
+    prompt: string
+    schedule: string
+    model?: string
+    offPeakOnly?: boolean
+    enabled?: boolean
+  },
+  options?: RequestOptions,
+): Promise<{ job: OrchestratorJob }> {
+  return companionPost('/orchestrator/jobs', request, options)
+}
+
+/** 启用/停用定时任务。 */
+export function toggleJob(id: string, enabled: boolean): Promise<{ job: OrchestratorJob }> {
+  return companionPost('/orchestrator/jobs/toggle', { id, enabled })
+}
+
+/** 删除定时任务。 */
+export function deleteJob(id: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/orchestrator/jobs', { id })
+}
+
+/** 读取定时任务历史执行记录。 */
+export function fetchJobRuns(jobId: string, options?: RequestOptions): Promise<{ runs: readonly OrchestratorJobRun[] }> {
+  return companionGet<{ runs: readonly OrchestratorJobRun[] }>('/orchestrator/jobs/runs', { jobId }, options)
+}
+
+// ---------------------------------------------------------------------------
+// 模块 J：安全与审计（/security/*）
+// ---------------------------------------------------------------------------
+
+/** Key 权限范围（J1）。 */
+export interface SecurityKeyScope {
+  readonly access: 'full' | 'read'
+  readonly models: readonly string[]
+  readonly dailyBudgetCny: number
+}
+
+/** 命名 Key 展示视图（安全红线：不含明文，仅掩码元数据）。 */
+export interface SecurityKeyView {
+  readonly name: string
+  readonly note: string
+  readonly createdAt: number
+  readonly lastUsedAt: number
+  readonly scope: SecurityKeyScope
+  readonly configured: boolean
+  readonly rotationDue: boolean
+}
+
+/** 审计日志条目（J2；Prompt 摘要已脱敏）。 */
+export interface AuditEntry {
+  readonly id: string
+  readonly ts: number
+  readonly model: string
+  readonly promptSummary: string
+  readonly promptTokens: number
+  readonly completionTokens: number
+  readonly costCny: number
+  readonly status: string
+  readonly source: string
+}
+
+/** DLP 规则（J3）。 */
+export interface DlpRule {
+  readonly id: string
+  readonly name: string
+  readonly pattern: string
+  readonly builtin: boolean
+  readonly enabled: boolean
+}
+
+/** DLP 命中。 */
+export interface DlpFinding {
+  readonly ruleId: string
+  readonly ruleName: string
+  readonly sample: string
+  readonly count: number
+}
+
+/** DLP 设置（J3）。 */
+export interface DlpSettings {
+  readonly enabled: boolean
+  readonly strict: boolean
+}
+
+/** 合规报表（J4）。 */
+export interface ComplianceReport {
+  readonly from: string
+  readonly to: string
+  readonly totalCalls: number
+  readonly totalCostCny: number
+  readonly totalTokens: number
+  readonly modelShare: Readonly<Record<string, number>>
+  readonly blocks: Readonly<Record<string, number>>
+  readonly blockTotal: number
+  readonly alerts: readonly { readonly ts: number; readonly kind: string; readonly detail: string }[]
+}
+
+/** 读取命名 Key 列表（不回传明文）。 */
+export function fetchSecurityKeys(options?: RequestOptions): Promise<{
+  keys: readonly SecurityKeyView[]
+  rotationDays: number
+  activeConfigured: boolean
+}> {
+  return companionGet('/security/keys', undefined, options)
+}
+
+/** 保存命名 Key（服务端加密落盘）。 */
+export function saveSecurityKey(
+  request: { name: string; apiKey: string; note?: string; scope?: Partial<SecurityKeyScope> },
+  options?: RequestOptions,
+): Promise<{ key: SecurityKeyView }> {
+  return companionPost('/security/keys', request, options)
+}
+
+/** 切换激活 Key。 */
+export function activateSecurityKey(name: string): Promise<OkResponse> {
+  return companionPost<OkResponse>('/security/keys/activate', { name })
+}
+
+/** 删除命名 Key。 */
+export function deleteSecurityKey(name: string): Promise<OkResponse> {
+  return companionDelete<OkResponse>('/security/keys', { name })
+}
+
+/** Key 泄露检测（粘贴疑似泄露内容进行检查）。 */
+export function checkKeyLeak(content: string, options?: RequestOptions): Promise<{
+  leaked: readonly string[]
+  safe: boolean
+}> {
+  return companionPost('/security/keys/leak-check', { content }, options)
+}
+
+/** 读取 Key 轮换到期提醒。 */
+export function fetchKeyRotation(options?: RequestOptions): Promise<{
+  due: readonly { readonly name: string; readonly ageDays: number }[]
+  thresholdDays: number
+}> {
+  return companionGet('/security/keys/rotation', undefined, options)
+}
+
+/** 查询审计日志（支持时间/模型/状态筛选）。 */
+export function fetchAuditLog(
+  params: { from?: number; to?: number; model?: string; status?: string; limit?: number },
+  options?: RequestOptions,
+): Promise<{ entries: readonly AuditEntry[] }> {
+  return companionGet<{ entries: readonly AuditEntry[] }>('/security/audit', params, options)
+}
+
+/** 导出审计日志（CSV/JSON）。 */
+export function exportAuditLog(
+  params: { format: 'csv' | 'json'; from?: number; to?: number },
+  options?: RequestOptions,
+): Promise<{ format: 'csv' | 'json'; fileName: string; content: string }> {
+  return companionGet('/security/audit/export', params, options)
+}
+
+/** 读取 DLP 状态（设置 + 规则）。 */
+export function fetchDlpState(options?: RequestOptions): Promise<{
+  settings: DlpSettings
+  rules: readonly DlpRule[]
+}> {
+  return companionGet('/security/dlp/state', undefined, options)
+}
+
+/** 更新 DLP 设置。 */
+export function updateDlpSettings(patch: { enabled?: boolean; strict?: boolean }): Promise<{ settings: DlpSettings }> {
+  return companionPost('/security/dlp/settings', patch)
+}
+
+/** 新增自定义 DLP 规则。 */
+export function addDlpRule(
+  request: { name: string; pattern: string; enabled?: boolean },
+  options?: RequestOptions,
+): Promise<{ rules: readonly DlpRule[] }> {
+  return companionPost('/security/dlp/rules', request, options)
+}
+
+/** 启用/停用 DLP 规则。 */
+export function toggleDlpRule(id: string, enabled: boolean): Promise<{ rules: readonly DlpRule[] }> {
+  return companionPost('/security/dlp/rules/toggle', { id, enabled })
+}
+
+/** 删除自定义 DLP 规则。 */
+export function deleteDlpRule(id: string): Promise<{ rules: readonly DlpRule[] }> {
+  return companionDelete('/security/dlp/rules', { id })
+}
+
+/** DLP 发送前预检扫描。 */
+export function scanDlp(text: string, options?: RequestOptions): Promise<{
+  findings: readonly DlpFinding[]
+  clean: boolean
+  settings: DlpSettings
+}> {
+  return companionPost('/security/dlp/scan', { text }, options)
+}
+
+/** 读取合规报表。 */
+export function fetchComplianceReport(
+  range: { from: string; to: string },
+  options?: RequestOptions,
+): Promise<ComplianceReport> {
+  return companionGet<ComplianceReport>('/security/report', { from: range.from, to: range.to }, options)
+}
+
+/** 导出合规报表（自包含 HTML，经浏览器打印可另存 PDF）。 */
+export function exportComplianceReport(
+  range: { from: string; to: string },
+  options?: RequestOptions,
+): Promise<{ format: 'html'; fileName: string; content: string }> {
+  return companionGet('/security/report/export', { from: range.from, to: range.to }, options)
+}
+
+// ---------------------------------------------------------------------------
 // 浏览器工具：base64 解码、下载、打印
 // ---------------------------------------------------------------------------
 

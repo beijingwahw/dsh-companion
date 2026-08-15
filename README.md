@@ -1,6 +1,6 @@
 # DeepSeek Companion
 
-**DeepSeek Harness 官方伴侣插件** —— 基于 Cordis 框架与 Harness Plugin SDK 构建，为 DeepSeek Harness 平台提供对话智能导出、上下文交接摘要、API 成本优化与全局对话检索四大能力。
+**DeepSeek Harness 官方伴侣插件** —— 基于 Cordis 框架与 Harness Plugin SDK 构建，为 DeepSeek Harness 平台提供对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、执行轨迹分析、Prompt 工程工作台、多模型竞技场、任务编排与安全审计九大能力。
 
 - 开发语言：TypeScript（`strict: true`，ESM）
 - 运行框架：DeepSeek Harness（Cordis ≥ 4.0，一切皆插件）
@@ -17,8 +17,13 @@
 | **B · 上下文交接摘要** | 一键生成 ≤500 字四段式交接摘要、可编辑、复制到剪贴板、保存为模板、导入摘要作为新对话的 system 首条消息实现上下文继承 | `enableHandoff` |
 | **C · API 成本优化（开发者模式）** | API Key 加密托管、**官方动态计价引擎**（每小时抓取 DeepSeek 与国产厂商官方定价页，新模型/调价自动导入，抓取失败静默降级内置快照）、**峰谷分时计价**（高峰时段按高峰价计费）、峰谷自动调度（高峰窗口实时解析自官方定价页）、模型智能路由、**日/月双档预算** 80%/100% 预警并自动暂停非必要调用、缓存命中折扣计费、每日/每周 Token 消耗与费用报表 | `enableCost` |
 | **D · 全局对话检索 + 对话内搜索** | 关键词模糊搜索、时间范围筛选、自定义标签增删与按标签过滤、结果点击直达对话；**对话内搜索**（Ctrl+F 浮动查找栏，CSS Custom Highlight API 无侵入高亮，大小写/全词开关、查询历史、流式输出期间自动重同步） | `enableSearch` |
+| **E · 执行轨迹分析器（开发者）** | Harness 原生轨迹解析为可交互时间轴（耗时/Token 拆分/模型/缓存命中）、一键定位最慢与最贵的 3 个步骤、异常自动标注（重试循环/Token 爆炸/缓存未命中/死循环）、两次轨迹 Diff 对比（HTML 报告导出）、日聚合趋势与历史基准线告警 | `enableTrace` |
+| **F · Prompt 工程工作台（开发者）** | Prompt 版本管理（自动版本号/备注/标签/回滚）、A/B 测试面板（批量测试集、指标对比、人工评分胜率统计）、模板库（分类/变量插值/一键生成 Python·Node.js·curl 调用代码）、结构化输出 JSON Schema 批量校验与合规率统计 | `enablePrompt` |
+| **G · 多模型竞技场（开发者）** | 同 Prompt 多模型并行对比（最多 5 个，输出/耗时/Token/费用并排）、批量评测排行榜（准确率/P50·P95·P99/成本/合规率综合得分，MD/HTML 报告）、模型推荐引擎（任务类型+预算+延迟+峰谷定价感知，附推荐理由）、外部厂商 Key 加密托管 | `enableArena` |
+| **H · 断点续跑与任务编排（开发者）** | 可视化流水线（模型/Prompt/输入来源/条件分支/超时/重试/依赖，自动生成 YAML）、断点续跑（进度百分比、中间结果持久化、从最后成功步骤恢复）、批量任务队列（优先级/截止时间/失败策略/批量暂停恢复取消）、定时调度（Cron + 中文自然语言，峰谷空闲时段执行，历史归档） | `enableOrchestrator` |
+| **J · 安全与审计（企业开发者）** | 多 API Key 管理（权限范围/轮换提醒/泄露检测）、操作审计日志（脱敏 Prompt 摘要/筛选/CSV·JSON 导出）、数据防泄漏 DLP（内置+自定义正则规则、严格模式拦截、发送前预检）、合规报表（调用/费用/模型占比/拦截/告警，HTML 导出可打印为 PDF） | `enableSecurity` |
 
-四个模块均为独立 Cordis 子插件，可任意组合启停，互不影响。
+九个模块均为独立 Cordis 子插件，可任意组合启停，互不影响。
 
 ---
 
@@ -116,6 +121,11 @@ npm run build          # 编译到 lib/
 | `enableHandoff` | boolean | `true` | 启用模块 B |
 | `enableCost` | boolean | `true` | 启用模块 C |
 | `enableSearch` | boolean | `true` | 启用模块 D |
+| `enableTrace` | boolean | `true` | 启用模块 E |
+| `enablePrompt` | boolean | `true` | 启用模块 F |
+| `enableArena` | boolean | `true` | 启用模块 G |
+| `enableOrchestrator` | boolean | `true` | 启用模块 H |
+| `enableSecurity` | boolean | `true` | 启用模块 J |
 | `apiBaseUrl` | string | `https://api.deepseek.com` | DeepSeek API 基址（manifest 仅放行该域名） |
 | `apiTimeoutMs` | number | `60000` | 单次 API 调用超时（毫秒） |
 
@@ -127,7 +137,7 @@ npm run build          # 编译到 lib/
 
 ```
 src/
-├── index.ts              # 宿主入口：挂载核心服务 + 按配置挂载四个模块子插件
+├── index.ts              # 宿主入口：挂载核心服务 + 按配置挂载九个模块子插件
 ├── config.ts             # 根配置 schema（schemastery 校验）
 ├── core/                 # 核心基础设施
 │   ├── service.ts        #   CompanionCore 根服务（ctx.companion，持有动态计价引擎）
@@ -147,14 +157,20 @@ src/
 │   ├── export/           # 模块 A：导出 + 批量 ZIP + 光栅载荷（PNG/免打印 PDF）
 │   ├── handoff/          # 模块 B：摘要生成 / 模板 / 武装导入
 │   ├── cost/             # 模块 C：网关 / 调度器 / 路由 / 日/月双档预算 / 设置
-│   └── search/           # 模块 D：检索 + 标签
+│   ├── search/           # 模块 D：检索 + 标签
+│   ├── trace/            # 模块 E：轨迹派生 / 异常标注 / Diff / 日聚合统计
+│   ├── prompt/           # 模块 F：版本管理 / A/B 测试 / 模板库 / Schema 校验
+│   ├── arena/            # 模块 G：模型目录 / 并行对比 / 排行榜 / 推荐引擎
+│   ├── orchestrator/     # 模块 H：流水线引擎 / 队列 / Cron 与自然语言调度
+│   └── security/         # 模块 J：命名 Key / 审计日志 / DLP / 合规报表
 ├── client/               # 浏览器端 UI（slots 注入，官方组件库）
 │   ├── index.tsx         #   客户端入口：slot 注册 + 对话内搜索控制器生命周期
 │   ├── raster.ts         #   客户端光栅导出引擎（移植自 dsh-conv-export）：
 │   │                     #   PNG 长图 / 免打印多页 PDF（foreignObject → canvas → JPEG → PDF 组装）
 │   ├── convsearch/       #   对话内搜索（移植自 dsh-conv-search）：
 │   │                     #   engine（Highlight API）/ controller（浮动栏+快捷键）/ styles
-│   └── components/       #   导出弹窗 / 摘要弹窗 / 导入 dock / 检索视图 / 报表视图
+│   └── components/       #   导出弹窗 / 摘要弹窗 / 导入 dock / 检索视图 / 报表视图 /
+│                         #   轨迹分析 / Prompt 工作台 / 竞技场 / 任务编排 / 安全审计视图
 └── types/                # Harness 子系统适配层类型声明
 ```
 
@@ -187,7 +203,7 @@ src/
 - [x] `manifest.json`（权限与隐私声明）、`package.json`、`cordis.patch.yml`（bundle patch 层）、`tsconfig.json`
 - [x] `README.md`（本文件）：功能介绍、安装指南、使用说明
 - [x] `DESIGN.md`：架构契约与开发规范
-- [x] 四模块独立启停：配置开关 + 独立子插件 + manifest 模块声明三层保障
+- [x] 九模块独立启停：配置开关 + 独立子插件 + manifest 模块声明三层保障
 
 ---
 

@@ -3,7 +3,7 @@
   "id": "deepseek-companion",
   "name": "DeepSeek Companion",
   "version": "0.1.0",
-  "description": "DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化（开发者模式）、全局对话检索。",
+  "description": "DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化（开发者模式）、全局对话检索、执行轨迹分析、Prompt 工程工作台、多模型竞技场、任务编排、安全与审计。",
   "author": "DeepSeek Companion Contributors",
   "license": "MIT",
   "engine": {
@@ -18,7 +18,12 @@
     { "id": "export", "name": "对话智能导出", "optional": true, "defaultEnabled": true },
     { "id": "handoff", "name": "上下文交接摘要", "optional": true, "defaultEnabled": true },
     { "id": "cost", "name": "API 成本优化（开发者模式）", "optional": true, "defaultEnabled": true },
-    { "id": "search", "name": "全局对话检索", "optional": true, "defaultEnabled": true }
+    { "id": "search", "name": "全局对话检索", "optional": true, "defaultEnabled": true },
+    { "id": "trace", "name": "执行轨迹分析器（开发者）", "optional": true, "defaultEnabled": true },
+    { "id": "prompt", "name": "Prompt 工程工作台（开发者）", "optional": true, "defaultEnabled": true },
+    { "id": "arena", "name": "多模型竞技场（开发者）", "optional": true, "defaultEnabled": true },
+    { "id": "orchestrator", "name": "断点续跑与任务编排（开发者）", "optional": true, "defaultEnabled": true },
+    { "id": "security", "name": "安全与审计（企业开发者）", "optional": true, "defaultEnabled": true }
   ],
   "permissions": {
     "network": {

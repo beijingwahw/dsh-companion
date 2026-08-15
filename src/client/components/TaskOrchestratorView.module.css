@@ -1,0 +1,216 @@
+/* 任务编排视图样式（CSS Modules + --dsw-alias-* 语义令牌）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  color: var(--dsw-alias-fg-primary, #1f2328);
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--dsw-alias-border-primary, #d0d7de);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.fieldFull {
+  grid-column: 1 / -1;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  border: 1px solid var(--dsw-alias-border-primary, #d0d7de);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.table th {
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+}
+
+.empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.rowActions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+}
+
+.statusRunning {
+  background: var(--dsw-alias-bg-accent-subtle, #ddf4ff);
+  color: var(--dsw-alias-accent-primary, #0969da);
+}
+
+.statusDone {
+  background: var(--dsw-alias-bg-success-subtle, #dafbe1);
+  color: var(--dsw-alias-fg-success, #1a7f37);
+}
+
+.statusFailed {
+  background: var(--dsw-alias-bg-danger-subtle, #ffebe9);
+  color: var(--dsw-alias-fg-danger, #cf222e);
+}
+
+.statusPaused {
+  background: var(--dsw-alias-bg-warning-subtle, #fff8c5);
+  color: var(--dsw-alias-fg-warning, #9a6700);
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.progressTrack {
+  flex: 1;
+  min-width: 80px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--dsw-alias-accent-primary, #0969da);
+}
+
+.stepList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stepCard {
+  border: 1px solid var(--dsw-alias-border-primary, #d0d7de);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stepName {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.stepMeta {
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.output {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.countCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-secondary, #f6f8fa);
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}
+
+.countValue {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--dsw-alias-fg-primary, #1f2328);
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dsw-alias-fg-secondary, #57606a);
+}

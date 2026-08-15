@@ -140,6 +140,97 @@ export function apply(ctx: Context): void {
 - `GET  /tags?sessionId=` → `{ tags: string[] }`（缺省返回 `{ tags: Record<string, string[]> }`）
 - `POST /tags` `{ sessionId, add?, remove? }` → `{ tags: string[] }`
 
+### 模块 E（trace）
+- `GET  /trace/sessions` → `{ sessions: SessionRecord[] }`
+- `GET  /trace/derive?sessionId=` → `{ trace, anomalies, stats, slowest?, costliest? }`
+  从会话日志派生轨迹：工具节点配对（已闭合节点不重复回填）、重试合并、
+  异常标注（retry-loop / token-explosion / cache-miss / infinite-loop）。
+- `POST /trace/ingest` `{ id?, trace }` → 同上（摄入 Harness 原生轨迹 JSON）。
+- `GET  /trace/get?id=` → 同上（读取已摄入轨迹）。
+- `POST /trace/diff` `{ old: { id?|sessionId? }, new: { id?|sessionId? }, format?='json'|'html' }`
+  → `{ format: 'json', entries }` 或 `{ format: 'html', fileName, html }`（自包含对比报告）。
+- `GET  /trace/stats?from=YYYY-MM-DD&to=YYYY-MM-DD` → `{ days: TraceDailyStats[], baseline? }`
+  日聚合趋势 + 历史基准线（偏离过大由客户端告警）。
+
+### 模块 F（prompt）
+- `GET    /prompt/versions` → `{ versions: PromptVersion[] }`
+- `POST   /prompt/versions` `{ content, note?, tags? }` → `{ version }`（自动递增版本号）
+- `POST   /prompt/rollback` `{ version, note? }` → `{ version }`（回滚生成新版本）
+- `POST   /prompt/tags` `{ version, add?, remove? }` → `{ version }`
+- `POST   /prompt/ab-test` `{ promptA, promptB, cases?, model? }` → `{ model, a, b, ratings }`
+  批量用例逐条跑两侧，汇总成功率/平均输出长度/平均延迟/总 Token。
+- `POST   /prompt/rate` `{ winner: 'A'|'B'|'tie', promptA?, promptB? }` → `{ ok: true, ratings }`
+- `GET    /prompt/templates` → `{ templates: PromptTemplate[] }`（内置 + 用户，同名用户覆盖内置）
+- `POST   /prompt/templates` `{ name, category?, content }` → `{ ok: true }`
+- `DELETE /prompt/templates` `{ name }` → `{ ok: true }`
+- `POST   /prompt/render` `{ template, variables? }` → `{ rendered }`（`{{var}}` 插值）
+- `POST   /prompt/codegen` `{ prompt, language: 'python'|'nodejs'|'curl', model? }` → `{ code }`
+- `POST   /prompt/validate` `{ prompt, schema, cases?, model? }`
+  → `{ model, total, compliant, complianceRate, runs }`（JSON Schema 批量校验，逐条标注违规字段）。
+
+### 模块 G（arena）
+- `GET    /arena/models` → `{ models: ArenaModelInfo[] }`（含外部厂商 Key 配置状态，不回明文）
+- `POST   /arena/keys` `{ modelId, apiKey, baseUrl? }` → `{ ok: true }`（AES-256-GCM 加密落盘）
+- `DELETE /arena/keys` `{ modelId }` → `{ ok: true }`
+- `POST   /arena/compare` `{ prompt, models }` → `{ prompt, results }`
+  最多 `MAX_COMPARE_MODELS`（5）个模型并行；DeepSeek 走核心服务记账，外部走 OpenAI 兼容协议直连。
+- `POST   /arena/leaderboard` `{ models, cases, format?='json'|'markdown'|'html' }`
+  → `{ format: 'json', rows }` 或 `{ format, fileName, content }`；
+  用例封顶 `MAX_LEADERBOARD_CASES`（30）；综合得分 = 成功率/延迟分位/Token/成本/合规率加权。
+- `GET    /arena/recommend?taskType=&budgetPerCallCny=&latency=`
+  → `{ taskType, taskTypeLabel, recommendations }`（峰谷定价感知，附推荐理由与单次成本估算）。
+
+### 模块 H（orchestrator）
+- `GET/POST /orchestrator/pipelines`、`DELETE /orchestrator/pipelines` `{ id }`
+  步骤数封顶 `MAX_PIPELINE_STEPS`（20）；`POST` 携带 `id` 为更新。
+- `GET  /orchestrator/pipelines/yaml?id=` → `{ id, yaml }`（自动生成 YAML 配置）。
+- `POST /orchestrator/runs` `{ pipelineId }` → `202 { runId, status }`
+  后台异步执行，立即返回；进度经 `GET /orchestrator/runs/get` 轮询。
+- `POST /orchestrator/runs/resume` `{ runId }` → 断点续跑（仅 paused/failed/cancelled 可恢复，
+  已完成步骤的中间结果直接复用不重跑）。
+- `POST /orchestrator/runs/pause` / `/cancel` `{ runId }` → `{ ok: true }`
+- `GET  /orchestrator/runs?pipelineId=` → `{ runs: [{ id, pipelineId, status, startedAt, endedAt, message, progress: { done, total } }] }`
+- `GET  /orchestrator/runs/get?id=` → `{ run }`（含各步骤中间结果）；`DELETE /orchestrator/runs` `{ id }`
+- `GET  /orchestrator/queue` → `{ tasks, counts }`；`GET /orchestrator/queue/counts` → `{ counts }`
+- `POST /orchestrator/queue` `{ name, prompt, model?, priority?, deadline?, failurePolicy? }` → `{ task }`
+  未完成任务封顶 `MAX_QUEUE_TASKS`（50）。
+- `POST /orchestrator/queue/cancel|pause|resume` `{ id }`；
+  `POST /orchestrator/queue/batch` `{ action: 'pause'|'resume'|'cancel' }` → `{ ok: true, changed }`；
+  `DELETE /orchestrator/queue` `{ id }`（运行中任务需先取消）。
+- `GET/POST /orchestrator/jobs`、`DELETE /orchestrator/jobs` `{ id }`
+  定时任务封顶 `MAX_JOBS`（20）；`schedule` 接受标准 5 字段 Cron 或中文自然语言
+  （「每天凌晨 2 点」「每隔 30 分钟」等），保存时统一转为 Cron；`offPeakOnly: true` 仅空闲时段执行。
+- `POST /orchestrator/jobs/toggle` `{ id, enabled }` → `{ job }`
+- `GET  /orchestrator/jobs/runs?jobId=` → `{ runs: ScheduledRun[] }`（历史归档）
+- `POST /orchestrator/parse-schedule` `{ text }` → `{ cron, nextRunAt }`（解析预检）。
+
+### 模块 J（security）
+- `GET    /security/keys` → `{ keys: [{ name, note, createdAt, lastUsedAt, scope, configured, rotationDue }], rotationDays, activeConfigured }`
+  安全红线：不回传 Key 明文。
+- `POST   /security/keys` `{ name, apiKey, note?, scope? }` → `{ key }`（加密落盘，同名覆盖）
+- `POST   /security/keys/activate` `{ name }` → `{ ok: true }`（切换激活 Key）
+- `DELETE /security/keys` `{ name }` → `{ ok: true }`
+- `POST   /security/keys/leak-check` `{ content }` → `{ leaked, safe }`（泄露检测）
+- `GET    /security/keys/rotation` → `{ due: [{ name, ageDays }], thresholdDays }`（30 天轮换提醒）
+- `GET    /security/audit?from=&to=&model=&status=&limit=` → `{ entries: AuditEntry[] }`
+  Prompt 摘要（前 100 字）落盘前已经 DLP 规则脱敏。
+- `GET    /security/audit/export?format=csv|json&from=&to=` → `{ format, fileName, content }`
+- `GET    /security/dlp/state` → `{ settings, rules }`
+- `POST   /security/dlp/settings` `{ enabled?, strict? }` → `{ settings }`
+  严格模式下 beforeCall 钩子检测到敏感内容直接抛 403 拦截调用。
+- `POST   /security/dlp/rules` `{ name, pattern, enabled? }` → `{ rules }`
+  自定义规则封顶 `MAX_CUSTOM_RULES`（20）；内置规则不可修改/删除，仅可切换启用。
+- `POST   /security/dlp/rules/toggle` `{ id, enabled }`；`DELETE /security/dlp/rules` `{ id }`
+- `POST   /security/dlp/scan` `{ text }` → `{ findings, clean, settings }`（发送前预检）
+- `GET    /security/report?from=YYYY-MM-DD&to=YYYY-MM-DD`
+  → `{ from, to, totalCalls, totalCostCny, totalTokens, modelShare, blocks, blockTotal, alerts }`
+- `GET    /security/report/export?from=&to=` → `{ format: 'html', fileName, content }`
+  自包含 HTML，客户端经打印管线另存 PDF 提交审计。
+
+集成点：`ctx.companion.addCallHook({ beforeCall, afterCall })`（core/service.ts）——
+beforeCall 抛错即拦截调用（DLP 严格模式）；afterCall best-effort 记录审计与异常告警
+（单次 Token > 100k、60 秒内调用 > 30 次）。
+
 ## 5. 命令面板（ctx.commands）
 
 | 命令 | 模块 | 说明 |
@@ -151,6 +242,9 @@ export function apply(ctx: Context): void {
 | `usage` | C | 输出本月用量文本报告 |
 | `search` | D | 检索历史对话 |
 | `tag` | D | 为会话增删标签 |
+| `trace` | E | 分析会话执行轨迹（耗时/Token/异常） |
+| `prompt` | F | 查看 Prompt 版本历史 |
+| `tasks` | H | 查看任务队列与定时任务概览 |
 
 命令 handler 与 HTTP 端点复用同一套模块内服务函数，不重复实现逻辑。
 
@@ -160,7 +254,8 @@ export function apply(ctx: Context): void {
 - UI 只经 slots 组合（官方纪律），所有注册组件经 `SlotErrorBoundary` 包裹（渲染错误降级为提示文案，不波及宿主）：
   - `'conversation.session.header.actions'`：导出按钮、交接摘要按钮、对话内搜索按钮；
   - `'conversation.input.dock'`：导入历史摘要入口；
-  - `'conversation.view'`：全局检索视图页、成本报表视图页。
+  - `'conversation.view'`：全局检索视图页、成本报表视图页、轨迹分析视图页、
+    Prompt 工作台视图页、多模型竞技场视图页、任务编排视图页、安全与审计视图页。
 - 组件从 `@deepseek-ai/dsh-client-ui-primitives` 取（Button/Input/Select/Checkbox/Modal/Textarea/Spinner/Toast/Pill）。
 - 样式：CSS Modules（`*.module.css`），颜色只用 `--dsw-alias-*` 语义令牌；不写全局样式。
   例外：`convsearch/styles.ts` 以稳定 id 注入一段全局样式（浮动搜索栏 + `::highlight()` 绘制规则，

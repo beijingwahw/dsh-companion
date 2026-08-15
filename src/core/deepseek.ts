@@ -28,6 +28,8 @@ export interface ChatCompletionParams {
   messages: readonly ChatMessage[]
   temperature?: number
   maxTokens?: number
+  /** 开启 JSON 输出模式（response_format: json_object）。 */
+  jsonMode?: boolean
   signal?: AbortSignal
 }
 
@@ -102,6 +104,7 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
   }
   if (params.temperature !== undefined) body.temperature = params.temperature
   if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens
+  if (params.jsonMode) body.response_format = { type: 'json_object' }
 
   let response: Response
   try {
