@@ -1,4 +1,7 @@
-# DeepSeek Companion
+# DeepSeek Companion（开发者版）
+
+> **版本说明**：本仓库为**开发者版**，包含 A–J 全部九大模块。
+> 精简版（A–D 四大基础模块）请见 [beijingwahw/dsh-companion](https://github.com/beijingwahw/dsh-companion)。
 
 **DeepSeek Harness 官方伴侣插件** —— 基于 Cordis 框架与 Harness Plugin SDK 构建，为 DeepSeek Harness 平台提供对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、执行轨迹分析、Prompt 工程工作台、多模型竞技场、任务编排与安全审计九大能力。
 
