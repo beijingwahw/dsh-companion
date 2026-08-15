@@ -9,9 +9,7 @@
  *   对话内搜索（order 12，能力吸收自 dsh-conv-search：Ctrl+F 浮动查找栏 +
  *   CSS Custom Highlight API 高亮，流式输出期间自动重同步）；
  * - conversation.input.dock：上下文交接 dock 行（order 90）；
- * - conversation.view：全局检索（order 50）、成本报表（order 51）、
- *   轨迹分析（order 52）、Prompt 工作台（order 53）、多模型竞技场（order 54）、
- *   任务编排（order 55）、安全与审计（order 56）。
+ * - conversation.view：全局检索视图页（order 50）、成本报表视图页（order 51）。
  */
 import { Component, createElement, useState } from 'react'
 import type { ComponentType, ErrorInfo, ReactElement, ReactNode } from 'react'
@@ -22,11 +20,6 @@ import { HandoffDialog } from './components/HandoffDialog.js'
 import { ImportSummaryDock } from './components/ImportSummaryDock.js'
 import { SearchView } from './components/SearchView.js'
 import { CostReportView } from './components/CostReportView.js'
-import { TraceAnalyzerView } from './components/TraceAnalyzerView.js'
-import { PromptWorkbenchView } from './components/PromptWorkbenchView.js'
-import { ModelArenaView } from './components/ModelArenaView.js'
-import { TaskOrchestratorView } from './components/TaskOrchestratorView.js'
-import { SecurityAuditView } from './components/SecurityAuditView.js'
 import { convSearchController } from './convsearch/controller.js'
 
 /** 客户端插件名。 */
@@ -205,8 +198,7 @@ export function apply(ctx: ClientContext): void {
     'companion-client/input-dock',
   )
 
-  // 视图页：全局检索（50）+ 成本报表（51）+ 轨迹分析（52）+ Prompt 工作台（53）
-  // + 多模型竞技场（54）+ 任务编排（55）+ 安全与审计（56）
+  // 视图页：全局检索（order 50）+ 成本报表（order 51）
   ctx.effect(
     () =>
       ctx.slots.inject(SLOT_VIEW, () => {
@@ -228,59 +220,9 @@ export function apply(ctx: ClientContext): void {
           },
           withErrorBoundary('成本报表', CostReportView),
         )
-        const disposeTrace = ctx.slots.register(
-          {
-            name: SLOT_VIEW,
-            id: 'companion-trace-analyzer',
-            order: 52,
-            inject: (sessionId) => ({ sessionId }),
-          },
-          withErrorBoundary('轨迹分析', TraceAnalyzerView),
-        )
-        const disposePrompt = ctx.slots.register(
-          {
-            name: SLOT_VIEW,
-            id: 'companion-prompt-workbench',
-            order: 53,
-            inject: (sessionId) => ({ sessionId }),
-          },
-          withErrorBoundary('Prompt 工作台', PromptWorkbenchView),
-        )
-        const disposeArena = ctx.slots.register(
-          {
-            name: SLOT_VIEW,
-            id: 'companion-model-arena',
-            order: 54,
-            inject: (sessionId) => ({ sessionId }),
-          },
-          withErrorBoundary('多模型竞技场', ModelArenaView),
-        )
-        const disposeOrchestrator = ctx.slots.register(
-          {
-            name: SLOT_VIEW,
-            id: 'companion-task-orchestrator',
-            order: 55,
-            inject: (sessionId) => ({ sessionId }),
-          },
-          withErrorBoundary('任务编排', TaskOrchestratorView),
-        )
-        const disposeSecurity = ctx.slots.register(
-          {
-            name: SLOT_VIEW,
-            id: 'companion-security-audit',
-            order: 56,
-            inject: (sessionId) => ({ sessionId }),
-          },
-          withErrorBoundary('安全与审计', SecurityAuditView),
-        )
         return () => {
           disposeSearch()
           disposeCost()
-          disposeTrace()
-          disposePrompt()
-          disposeArena()
-          disposeOrchestrator()
-          disposeSecurity()
         }
       }),
     'companion-client/views',

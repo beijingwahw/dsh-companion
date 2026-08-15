@@ -65,8 +65,7 @@ function formatCny(value: number): string {
 /**
  * 浅比较 CostState 的关键字段（视图实际渲染的字段）：
  * 轮询返回的数据若无变化则跳过 setState，避免无谓的重渲染。
- * rules 本视图不渲染，不参与比较；pricing.scheduled 参与比较
- * （视图渲染峰谷生效日期与高峰窗口文案）。
+ * rules/pricing 本视图不渲染，不参与比较。
  */
 function isCostStateEqual(prev: CostState, next: CostState): boolean {
   return (
@@ -83,26 +82,8 @@ function isCostStateEqual(prev: CostState, next: CostState): boolean {
     prev.budget.paused === next.budget.paused &&
     prev.pricing.source === next.pricing.source &&
     prev.pricing.fetchedAt === next.pricing.fetchedAt &&
-    prev.pricing.lastChangedAt === next.pricing.lastChangedAt &&
-    isScheduledEqual(prev.pricing.scheduled, next.pricing.scheduled)
+    prev.pricing.lastChangedAt === next.pricing.lastChangedAt
   )
-}
-
-/** 比较峰谷定价计划（effective + 高峰窗口数组）。 */
-function isScheduledEqual(
-  prev: CostState['pricing']['scheduled'],
-  next: CostState['pricing']['scheduled'],
-): boolean {
-  if (prev === next) return true
-  if (prev === null || prev === undefined || next === null || next === undefined) return false
-  if (prev.effective !== next.effective) return false
-  const pw = prev.peakWindows ?? []
-  const nw = next.peakWindows ?? []
-  if (pw.length !== nw.length) return false
-  for (let i = 0; i < pw.length; i += 1) {
-    if (pw[i][0] !== nw[i][0] || pw[i][1] !== nw[i][1]) return false
-  }
-  return true
 }
 
 /** 成本报表视图页。 */

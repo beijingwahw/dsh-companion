@@ -167,10 +167,7 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
     <Modal
       open={props.open}
       title="导出对话"
-      // 导出进行中禁止经遮罩/Esc 关闭：异步流仍在跑，关闭后成功回调会作用于已卸载的对话框。
-      onClose={() => {
-        if (!exporting) props.onClose()
-      }}
+      onClose={props.onClose}
       footer={
         <div className={styles.footer}>
           <Button variant="ghost" onClick={props.onClose} disabled={exporting}>

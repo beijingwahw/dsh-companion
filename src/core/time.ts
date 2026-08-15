@@ -85,35 +85,17 @@ export function isPeakTime(
 
 /**
  * 从某时刻起，下一个处于空闲（非高峰）时段的分钟边界。
- * 仅在调用方已确认 isPeakTime(ts) 为真时使用。
- *
- * 直接计算包含当前时刻的各高峰窗口的结束时刻并取最大值（O(窗口数)），
- * 不再逐分钟扫描；无窗口包含时兜底返回下一分钟。
+ * 仅在调用方已确认 isPeakTime(ts) 为真时使用；48 小时内必有解。
  */
 export function nextOffPeakStart(
   ts: number,
   windows: readonly PeakWindow[] = DEFAULT_PEAK_WINDOWS,
 ): number {
-  const minuteFloor = Math.floor(ts / 60_000) * 60_000
-  const parts = beijingParts(minuteFloor)
-  const nowMinutes = parts.hour * 60 + parts.minute
-  // 当日 00:00 的北京时间时间戳（Date.UTC 自动归一化）。
-  const dayStartUtc = Date.UTC(parts.year, parts.month - 1, parts.day)
-  const dayStartTs = dayStartUtc - BEIJING_OFFSET_MS
-
-  let best = 0
-  for (const w of windows) {
-    const start = w.startHour * 60 + w.startMinute
-    const end = w.endHour * 60 + w.endMinute
-    const inWindow =
-      start > end ? nowMinutes >= start || nowMinutes < end : nowMinutes >= start && nowMinutes < end
-    if (!inWindow) continue
-    // 结束时刻：跨午夜窗口且当前处于午夜后段时，结束在今日；否则可能需顺延到明日。
-    const endTsToday = dayStartTs + end * 60_000
-    const endTs = endTsToday > minuteFloor ? endTsToday : endTsToday + 24 * 60 * 60_000
-    if (endTs > best) best = endTs
+  let t = Math.floor(ts / 60_000) * 60_000 + 60_000
+  for (let i = 0; i < 48 * 60; i += 1, t += 60_000) {
+    if (!isPeakTime(t, windows)) return t
   }
-  return best > 0 ? best : minuteFloor + 60_000
+  return t
 }
 
 function pad2(n: number): string {

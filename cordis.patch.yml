@@ -6,16 +6,11 @@
     - id: companion
       name: dsh-companion
       config:
-        # 九个功能模块可独立启停，互不影响
+        # 四个功能模块可独立启停，互不影响
         enableExport: true
         enableHandoff: true
         enableCost: true
         enableSearch: true
-        enableTrace: true
-        enablePrompt: true
-        enableArena: true
-        enableOrchestrator: true
-        enableSecurity: true
         # DeepSeek 官方 API（权限最小化：manifest.json 仅放行该域名）
         apiBaseUrl: 'https://api.deepseek.com'
         apiTimeoutMs: 60000

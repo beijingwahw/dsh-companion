@@ -56,15 +56,6 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
   /** 脏标记：用户一旦手动编辑过摘要，后续（慢）生成结果返回时不再覆盖内容。 */
   const dirtyRef = useRef(false)
 
-  /** 手动重试的 AbortController：卸载时中止在途请求，避免对已卸载组件 setState。 */
-  const manualAbortRef = useRef<AbortController | null>(null)
-  useEffect(
-    () => () => {
-      manualAbortRef.current?.abort()
-    },
-    [],
-  )
-
   /** 调用服务端为指定会话生成交接摘要。
    *
    * - signal 被中止或 isCancelled 为真（卸载 / sessionId 变化）时静默返回，不再更新任何状态；
@@ -92,15 +83,6 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     },
     [],
   )
-
-  /** 手动重试生成（错误行的「重试」按钮）：与自动路径同样受 AbortController 保护。 */
-  const handleRetry = useCallback((): void => {
-    if (!sessionId) return
-    manualAbortRef.current?.abort()
-    const controller = new AbortController()
-    manualAbortRef.current = controller
-    void generate(sessionId, controller.signal, () => controller.signal.aborted)
-  }, [sessionId, generate])
 
   /** 拉取模板列表。 */
   const loadTemplates = useCallback(async (): Promise<void> => {
@@ -238,7 +220,7 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
             <div className={styles.error}>
               <span>{generateError}</span>
               {sessionId ? (
-                <Button variant="ghost" size="sm" onClick={handleRetry}>
+                <Button variant="ghost" size="sm" onClick={() => void generate(sessionId)}>
                   重试
                 </Button>
               ) : null}
