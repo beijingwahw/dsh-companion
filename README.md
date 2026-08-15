@@ -29,36 +29,31 @@
 
 ---
 
-## 安装指南
+## 安装
 
-### 环境要求
-
+### 前置要求
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) `>= 0.1.0`
 - Node.js `^22.19 || >=24`
-- pnpm（Harness 仓库工作区）或 npm（独立构建本插件）
-- 一个可用的 DeepSeek Harness 部署（`harness >= 0.1.0`）
 
-### 方式一：作为 bundle patch 层安装（推荐）
+### 从源码安装
 
-1. 将本包放入 Harness 工作区（或发布后以依赖引入）：
-
-   ```sh
-   pnpm install
-   pnpm run build        # 产出 lib/（ESM + d.ts）
-   ```
-
-2. 在目标 profile 的 `dsh.profile.bundles` 中列出 `dsh-companion`。Harness 会自动应用 `cordis.patch.yml` patch 层，将插件挂载为 `companion`。
-
-3. 重启 Harness 会话，插件即随宿主启动。
-
-### 方式二：独立验证构建
-
-```sh
+```bash
+git clone https://github.com/beijingwahw/dsh-companion.git
+cd dsh-companion
 npm install
-npm run typecheck      # tsc --noEmit 严格类型检查
-npm run build          # 编译到 lib/
+npm run build
+
+# 注册到 Harness（web profile）
+dsh plugin --profile web add $(pwd)
 ```
 
-构建产物（`lib/**/*.js`、`lib/**/*.d.ts`）连同 `manifest.json`、`cordis.patch.yml` 即为可分发的插件包（见 `package.json` 的 `files` 字段）。
+### 启动
+
+```bash
+dsh web
+```
+
+插件面板将在 Harness Web UI 中自动加载。
 
 ### 验证安装
 
