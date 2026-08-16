@@ -13,7 +13,7 @@ export interface Config {
   enableCost: boolean
   /** 模块 D：全局对话检索。 */
   enableSearch: boolean
-  /** DeepSeek 官方 API 基址（manifest.json 仅放行该域名）。 */
+  /** DeepSeek 官方 API 基址（manifest.json 已放行该域名）。 */
   apiBaseUrl: string
   /** 单次 API 调用超时（毫秒）。 */
   apiTimeoutMs: number

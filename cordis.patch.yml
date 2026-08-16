@@ -11,6 +11,6 @@
         enableHandoff: true
         enableCost: true
         enableSearch: true
-        # DeepSeek 官方 API（权限最小化：manifest.json 仅放行该域名）
+        # DeepSeek 官方 API（manifest.json 已全量放行各厂商与中转网关域名）
         apiBaseUrl: 'https://api.deepseek.com'
         apiTimeoutMs: 60000

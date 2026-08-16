@@ -119,7 +119,7 @@ dsh web
 | `enableHandoff` | boolean | `true` | 启用模块 B |
 | `enableCost` | boolean | `true` | 启用模块 C |
 | `enableSearch` | boolean | `true` | 启用模块 D |
-| `apiBaseUrl` | string | `https://api.deepseek.com` | DeepSeek API 基址（manifest 仅放行该域名） |
+| `apiBaseUrl` | string | `https://api.deepseek.com` | DeepSeek API 基址（manifest 已放行该域名） |
 | `apiTimeoutMs` | number | `60000` | 单次 API 调用超时（毫秒） |
 
 停用单个模块：将对应开关置为 `false`（配置层），或在 `manifest.json` 的模块声明中关闭。模块之间零耦合，停用一个不影响其余模块。
@@ -178,7 +178,7 @@ src/
 |---|---|
 | 数据本地化 | 对话内容、设置、API Key 仅写入 Harness 插件沙箱的 `companion` 存储域，不上传任何第三方服务器 |
 | API Key 加密 | AES-256-GCM（12 字节随机 IV + 认证标签），自描述载荷 `v1.<iv>.<tag>.<ciphertext>`；密钥与密文分离存储 |
-| 权限最小化 | `manifest.json` 网络白名单仅 `https://api.deepseek.com`；存储域仅 `companion`；服务清单逐项列明 |
+| 网络权限 | `manifest.json` 全量放行 DeepSeek 官方 API、全部国产与海外主流模型厂商端点、各厂商定价页及常见中转/聚合网关，供动态计价引擎实时抓取；存储域仅 `companion`；服务清单逐项列明 |
 | 无追踪 | 无任何遥测 / 行为分析代码；`manifest.json` 显式声明 `tracking: false, telemetry: false` |
 | Key 不外泄 | 任何响应、日志、事件中不出现 Key 明文；导出与摘要内容仅在浏览器本地生成 |
 

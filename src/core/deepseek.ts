@@ -28,6 +28,8 @@ export interface ChatCompletionParams {
   messages: readonly ChatMessage[]
   temperature?: number
   maxTokens?: number
+  /** 开启 JSON 输出模式（response_format: json_object）。 */
+  jsonMode?: boolean
   signal?: AbortSignal
 }
 
