@@ -20,13 +20,13 @@
     "lib/**/*.js",
     "lib/**/*.d.ts",
     "cordis.patch.yml",
-    "manifest.json"
+    "manifest.json",
+    "dsh.plugin.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --expose-internals --import tsx ./node_modules/@deepseek-ai/cordis/bin.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "preinstall": "node -e \"const a=process.env.npm_config_user_agent||'';if(!/pnpm/.test(a)){console.error('[preinstall] 本项目约定使用 pnpm 安装依赖，请先执行 npm i -g pnpm；已拦截 npm/yarn。');process.exit(1)}\""
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
