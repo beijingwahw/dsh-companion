@@ -14,3 +14,6 @@
         # DeepSeek 官方 API（manifest.json 已全量放行各厂商与中转网关域名）
         apiBaseUrl: 'https://api.deepseek.com'
         apiTimeoutMs: 60000
+        # 动态计价引擎：完整列出全部键，用户层覆盖时照抄即得整行、不会漏键
+        pricingTimeoutMs: 10000
+        pricingRefreshIntervalMin: 60
