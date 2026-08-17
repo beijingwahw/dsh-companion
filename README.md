@@ -38,6 +38,19 @@
 
 将本仓库放入 DeepSeek Harness 的插件目录（或通过包管理器安装），Harness 会依据 dsh.plugin.json 与 cordis.patch.yml 自动加载。
 
+## 开发期热更新（HMR）
+
+| 层 | 方法 | 生效范围 |
+|---|---|---|
+| 运行配置 | 编辑 dsh 用户层 `cordis.patch.yml`（`~/.dsh/profiles/<name>/` 或 `~/.dsh/`），保存即生效 | dsh 原生监视用户层，事务性重载该行（bundle 层默认值已全量列出，照抄整行覆盖即可） |
+| 开发期代码 | `npm run dev` 起独立 cordis + HMR 进程 | 保存 `src/` 下任意文件或 `cordis.yml` → 旧实例卸载（effect 回卷）→ 新代码挂载，无需重启 |
+| 安装产物 | 改代码 → `pnpm build` → 重新 `dsh plugin add` → 重启 dsh | 更新已安装的插件 |
+
+`npm run dev` 的组成：仓库根 `cordis.yml` 依次挂 logger / timer / hmr / 宿主桩 / 本插件（直接加载 `src/index.ts`，config 与 `cordis.patch.yml` 逐键一致）；
+`dev/host-stubs.ts` 提供 dsh 宿主 7 个服务的最小桩（webServer / storageDomain / credentials / sessionQuery / commands / settings / systemPrompt）——存储域为内存版且按名缓存，热重载后开发数据不丢。
+
+> 注意：开发 HMR 需 Node ≥ 24.11（24.1.0 等早期 24.x 的 Node 内部接口与 cordis-plugin-loader 1.0.2 不兼容，表现为编辑文件不触发重载）。
+
 ### 从源码安装
 
 ```bash

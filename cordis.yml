@@ -1,0 +1,25 @@
+# 开发期热更新进程：npm run dev（独立 cordis + HMR，与 dsh 安装互不影响）。
+# dsh 加载本包时只读 cordis.patch.yml（package.json 的 dsh.bundle.patch），不读此文件。
+# 保存 src/ 下任意文件或本文件本身 → 旧实例卸载（effect 回卷）→ 新代码挂载，无需重启。
+# config 与 cordis.patch.yml 逐键一致：开发行为 = 生产 bundle 行为。
+- id: logger
+  name: '@deepseek-ai/cordis-plugin-logger-console'
+- id: timer          # HMR 去抖依赖 timer 服务，缺失则 HMR 永远 PENDING
+  name: '@deepseek-ai/cordis-plugin-timer'
+- id: hmr
+  name: '@deepseek-ai/cordis-plugin-hmr'
+  config:
+    root: ['.']      # 监视仓库目录（默认忽略 node_modules / .* / cache / data）
+- id: host-stubs
+  name: './dev/host-stubs.ts'
+- id: companion
+  name: './src/index.ts'
+  config:
+    enableExport: true
+    enableHandoff: true
+    enableCost: true
+    enableSearch: true
+    apiBaseUrl: https://api.deepseek.com
+    apiTimeoutMs: 60000
+    pricingTimeoutMs: 10000
+    pricingRefreshIntervalMin: 60
