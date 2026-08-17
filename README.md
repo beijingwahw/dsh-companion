@@ -36,7 +36,52 @@
 - Node.js `^22.19 || >=24`
 - pnpm（`npm install -g pnpm`）
 
-将本仓库放入 DeepSeek Harness 的插件目录（或通过包管理器安装），Harness 会依据 dsh.plugin.json 与 cordis.patch.yml 自动加载。
+### 通过 GitHub 短名（推荐）
+
+直接从本仓库安装最新版，dsh 会自动拉取并合并 bundle patch：
+
+```bash
+# 安装到 web profile（DeepSeek Harness Web UI）
+dsh plugin add beijingwahw/dsh-companion --profile web
+
+# 安装到当前激活的 default profile
+dsh plugin add beijingwahw/dsh-companion
+
+# 升级到最新 commit
+dsh plugin upgrade dsh-companion --profile web
+
+# 卸载
+dsh plugin remove dsh-companion --profile web
+```
+
+### 从源码安装
+
+```bash
+git clone https://github.com/beijingwahw/dsh-companion.git
+cd dsh-companion
+pnpm install
+pnpm run build
+```
+
+然后把 `dsh-companion` 目录放入 DeepSeek Harness 的插件目录，或通过本地路径安装：
+
+```bash
+dsh plugin add ./dsh-companion --profile web
+```
+
+### 启动
+
+```bash
+dsh web
+```
+
+插件面板将在 Harness Web UI 中自动加载。
+
+### 验证安装
+
+在 Harness 命令面板执行 `usage` 命令，若返回本月用量文本报告，说明插件已正确挂载。
+
+---
 
 ## 开发期热更新（HMR）
 
@@ -44,7 +89,7 @@
 |---|---|---|
 | 运行配置 | 编辑 dsh 用户层 `cordis.patch.yml`（`~/.dsh/profiles/<name>/` 或 `~/.dsh/`），保存即生效 | dsh 原生监视用户层，事务性重载该行（bundle 层默认值已全量列出，照抄整行覆盖即可） |
 | 开发期代码 | `npm run dev` 起独立 cordis + HMR 进程 | 保存 `src/` 下任意文件或 `cordis.yml` → 旧实例卸载（effect 回卷）→ 新代码挂载，无需重启 |
-| 安装产物 | 改代码 → `pnpm build` → 重新 `dsh plugin add` → 重启 dsh | 更新已安装的插件 |
+| 安装产物 | 改代码 → `pnpm build` → 重新 `dsh plugin add beijingwahw/dsh-companion --profile web` → 重启 dsh | 更新已安装的插件 |
 
 `npm run dev` 的组成：仓库根 `cordis.yml` 依次挂 logger / timer / hmr / 宿主桩 / 本插件（直接加载 `src/index.ts`，config 与 `cordis.patch.yml` 逐键一致）；
 `dev/host-stubs.ts` 提供 dsh 宿主 7 个服务的最小桩（webServer / storageDomain / credentials / sessionQuery / commands / settings / systemPrompt）——存储域为内存版且按名缓存，热重载后开发数据不丢。
