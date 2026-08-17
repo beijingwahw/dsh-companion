@@ -48,8 +48,6 @@ dsh plugin add beijingwahw/dsh-companion --profile web
 dsh web
 ```
 
-验证：在 Harness 命令面板执行 `usage`，返回本月用量报告即安装成功。
-
 > 常用进阶命令：升级 `dsh plugin upgrade dsh-companion --profile web`；卸载 `dsh plugin remove dsh-companion --profile web`；本地路径安装 `dsh plugin add ./dsh-companion --profile web`。更多方式见「开发期热更新」后附。
 
 ---
