@@ -43,7 +43,7 @@ git clone https://github.com/beijingwahw/dsh-companion.git
 cd dsh-companion
 pnpm install
 pnpm run build
-
+```
 ### 启动
 
 ```bash
