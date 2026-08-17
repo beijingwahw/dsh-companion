@@ -36,50 +36,21 @@
 - Node.js `^22.19 || >=24`
 - pnpm（`npm install -g pnpm`）
 
-### 通过 GitHub 短名（推荐）
-
-直接从本仓库安装最新版，dsh 会自动拉取并合并 bundle patch：
+### 一键安装
 
 ```bash
-# 安装到 web profile（DeepSeek Harness Web UI）
 dsh plugin add beijingwahw/dsh-companion --profile web
-
-# 安装到当前激活的 default profile
-dsh plugin add beijingwahw/dsh-companion
-
-# 升级到最新 commit
-dsh plugin upgrade dsh-companion --profile web
-
-# 卸载
-dsh plugin remove dsh-companion --profile web
 ```
 
-### 从源码安装
-
-```bash
-git clone https://github.com/beijingwahw/dsh-companion.git
-cd dsh-companion
-pnpm install
-pnpm run build
-```
-
-然后把 `dsh-companion` 目录放入 DeepSeek Harness 的插件目录，或通过本地路径安装：
-
-```bash
-dsh plugin add ./dsh-companion --profile web
-```
-
-### 启动
+启动后插件面板自动加载：
 
 ```bash
 dsh web
 ```
 
-插件面板将在 Harness Web UI 中自动加载。
+验证：在 Harness 命令面板执行 `usage`，返回本月用量报告即安装成功。
 
-### 验证安装
-
-在 Harness 命令面板执行 `usage` 命令，若返回本月用量文本报告，说明插件已正确挂载。
+> 常用进阶命令：升级 `dsh plugin upgrade dsh-companion --profile web`；卸载 `dsh plugin remove dsh-companion --profile web`；本地路径安装 `dsh plugin add ./dsh-companion --profile web`。更多方式见「开发期热更新」后附。
 
 ---
 
@@ -96,25 +67,15 @@ dsh web
 
 > 注意：开发 HMR 需 Node ≥ 24.11（24.1.0 等早期 24.x 的 Node 内部接口与 cordis-plugin-loader 1.0.2 不兼容，表现为编辑文件不触发重载）。
 
-### 从源码安装
+### 从源码构建安装（贡献者 / 离线场景）
 
 ```bash
 git clone https://github.com/beijingwahw/dsh-companion.git
 cd dsh-companion
 pnpm install
 pnpm run build
+dsh plugin add . --profile web
 ```
-### 启动
-
-```bash
-dsh web
-```
-
-插件面板将在 Harness Web UI 中自动加载。
-
-### 验证安装
-
-在 Harness 命令面板执行 `usage` 命令，若返回本月用量文本报告，说明插件已正确挂载。
 
 ---
 
