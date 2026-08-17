@@ -1,3 +1,6 @@
 node_modules/
-*.tsbuildinfo
+*.log
 .env
+.DS_Store
+# lib/ 需提交：dsh 经 git 安装时不执行构建脚本（pnpm allowBuilds 禁止），
+# 产物必须随仓库分发，main: lib/index.js 才能解析。
