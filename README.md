@@ -36,6 +36,8 @@
 - Node.js `^22.19 || >=24`
 - pnpm（`npm install -g pnpm`）
 
+将本仓库放入 DeepSeek Harness 的插件目录（或通过包管理器安装），Harness 会依据 dsh.plugin.json 与 cordis.patch.yml 自动加载。
+
 ### 从源码安装
 
 ```bash
