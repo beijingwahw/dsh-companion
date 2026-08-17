@@ -33,6 +33,17 @@
     "@deepseek-ai/dsh-storage-domain": ">=0.0.1-0",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-storage-domain": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/cordis-plugin-hmr": "^1.0.16",
