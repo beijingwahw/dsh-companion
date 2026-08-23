@@ -1,10 +1,13 @@
 /**
  * 交接摘要对话框（模块 B 客户端 UI）：
- * - 打开后若有 sessionId 自动 POST /handoff/generate 生成当前会话摘要；
+ * - 会话选择可视化面板：列出全部历史会话（复用 GET /export/sessions），
+ *   支持按标题/ID 实时筛选、单选任意会话（不限于当前会话）、当前会话
+ *   带「当前」徽章；打开时默认选中当前会话并自动生成摘要，
+ *   切换选中后自动重新生成（取消在途请求、重置脏标记）；
  * - 结果置于可编辑 Textarea，可复制到剪贴板、保存为模板、作为新对话起点武装；
  * - 模板列表支持载入与删除；加载与错误态齐全。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import {
   Button,
@@ -16,12 +19,13 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   deleteHandoffTemplate,
+  fetchExportSessions,
   fetchHandoffTemplates,
   generateHandoff,
   importHandoff,
   saveHandoffTemplate,
 } from '../api.js'
-import type { HandoffTemplate } from '../api.js'
+import type { HandoffTemplate, SessionRecord } from '../api.js'
 import styles from './HandoffDialog.module.css'
 
 /** 组件 props：sessionId 由 slot 的 inject 注入。 */
@@ -37,10 +41,16 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleString('zh-CN', { hour12: false })
 }
 
-/** 交接摘要对话框：生成/编辑摘要 + 模板管理 + 武装到新对话。 */
+/** 交接摘要对话框：会话选择 + 生成/编辑摘要 + 模板管理 + 武装到新对话。 */
 export function HandoffDialog(props: HandoffDialogProps): ReactElement {
   /** 当前会话 id（const 局部量，便于在回调中保持类型收窄）。 */
   const sessionId = props.sessionId
+  /** 会话选择面板状态：历史会话列表 + 选中项 + 筛选词。 */
+  const [sessions, setSessions] = useState<readonly SessionRecord[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionsError, setSessionsError] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState('')
+  const [sessionFilter, setSessionFilter] = useState('')
   const [summary, setSummary] = useState('')
   const [model, setModel] = useState('')
   const [generating, setGenerating] = useState(false)
@@ -98,23 +108,64 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     }
   }, [])
 
-  // 打开对话框：刷新模板列表；有 sessionId 时自动生成交接摘要。
-  // 摘要生成可能较慢：以 AbortController + cancelled 守卫，卸载 / sessionId 变化时取消在途请求，
-  // 避免过期响应覆盖新会话的状态；每次重新打开（或切换会话）时重置脏标记。
+  /** 拉取历史会话列表（会话选择面板数据源；复用模块 A 的 /export/sessions）。 */
+  const loadSessions = useCallback(async (): Promise<void> => {
+    setSessionsLoading(true)
+    setSessionsError('')
+    try {
+      const response = await fetchExportSessions()
+      setSessions(response.sessions)
+    } catch (error) {
+      setSessionsError(error instanceof Error ? error.message : '会话列表加载失败')
+    } finally {
+      setSessionsLoading(false)
+    }
+  }, [])
+
+  /** 会话筛选结果：按标题或会话 ID 子串匹配（大小写不敏感）。 */
+  const filteredSessions = useMemo(() => {
+    const keyword = sessionFilter.trim().toLowerCase()
+    if (!keyword) return sessions
+    return sessions.filter(
+      (session) =>
+        (session.title ?? '').toLowerCase().includes(keyword) ||
+        session.id.toLowerCase().includes(keyword),
+    )
+  }, [sessions, sessionFilter])
+
+  // 打开对话框：刷新模板与会话列表；默认选中当前会话（存在时）。
+  // 无当前会话则不预选，用户从列表手动选择后才开始生成。
   useEffect(() => {
     if (!props.open) return
+    setSessionFilter('')
+    setSelectedSessionId(sessionId ?? '')
+    void loadTemplates()
+    void loadSessions()
+  }, [props.open, sessionId, loadTemplates, loadSessions])
+
+  // 选中会话变化时自动生成交接摘要（打开时的默认选中同样经此触发）。
+  // 摘要生成可能较慢：以 AbortController + cancelled 守卫，卸载 / 切换选中时
+  // 取消在途请求，避免过期响应覆盖新选中会话的状态；每次切换重置脏标记
+  // （切换即表明用户想要新会话的摘要，编辑中的旧内容不再保留）。
+  useEffect(() => {
+    if (!props.open || !selectedSessionId) return
     const controller = new AbortController()
     let cancelled = false
-    void loadTemplates()
-    if (sessionId) {
-      dirtyRef.current = false
-      void generate(sessionId, controller.signal, () => cancelled)
-    }
+    dirtyRef.current = false
+    void generate(selectedSessionId, controller.signal, () => cancelled)
     return () => {
       cancelled = true
       controller.abort()
     }
-  }, [props.open, sessionId, loadTemplates, generate])
+  }, [props.open, selectedSessionId, generate])
+
+  /** 选中某个会话（单选）：点击已选中项不重复触发生成。 */
+  const selectSession = useCallback(
+    (id: string): void => {
+      setSelectedSessionId((prev) => (prev === id ? prev : id))
+    },
+    [],
+  )
 
   /** 复制当前摘要到剪贴板。 */
   const handleCopy = useCallback(async (): Promise<void> => {
@@ -214,13 +265,91 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
       }
     >
       <div className={styles.body}>
+        <div className={styles.sessionSection}>
+          <div className={styles.sessionToolbar}>
+            <span className={styles.sectionTitle}>选择会话</span>
+            {selectedSessionId ? (
+              <span className={styles.sessionCount}>已选中 · 共 {filteredSessions.length} 个会话</span>
+            ) : (
+              <span className={styles.sessionCount}>共 {filteredSessions.length} 个会话</span>
+            )}
+          </div>
+          <Input
+            type="search"
+            value={sessionFilter}
+            onChange={(event) => setSessionFilter(event.target.value)}
+            placeholder="按标题或会话 ID 筛选…"
+          />
+          <div className={styles.sessionList}>
+            {sessionsLoading ? <Spinner label="加载会话列表…" /> : null}
+            {!sessionsLoading && sessionsError ? (
+              <div className={styles.error}>
+                <span>{sessionsError}</span>
+                <Button variant="ghost" size="sm" onClick={() => void loadSessions()}>
+                  重试
+                </Button>
+              </div>
+            ) : null}
+            {!sessionsLoading && !sessionsError && sessions.length === 0 ? (
+              <div className={styles.empty}>暂无可选择的会话</div>
+            ) : null}
+            {!sessionsLoading &&
+            !sessionsError &&
+            sessions.length > 0 &&
+            filteredSessions.length === 0 ? (
+              <div className={styles.empty}>没有匹配「{sessionFilter.trim()}」的会话</div>
+            ) : null}
+            {!sessionsLoading && !sessionsError
+              ? filteredSessions.map((session) => {
+                  const checked = selectedSessionId === session.id
+                  const isCurrent = session.id === sessionId
+                  return (
+                    <div
+                      key={session.id}
+                      role="button"
+                      tabIndex={0}
+                      className={checked ? styles.sessionItemSelected : styles.sessionItem}
+                      onClick={() => selectSession(session.id)}
+                      onKeyDown={(event) => {
+                        // Enter / Space 与点击等价（键盘可达性）
+                        if (event.key === 'Enter' || event.key === ' ') selectSession(session.id)
+                      }}
+                    >
+                      <span className={checked ? styles.radioOn : styles.radioOff} aria-hidden="true" />
+                      <span className={styles.sessionMeta}>
+                        <span className={styles.sessionTitleRow}>
+                          <span className={styles.sessionTitle}>
+                            {session.title ?? `会话 ${session.id}`}
+                          </span>
+                          {isCurrent ? <span className={styles.currentBadge}>当前</span> : null}
+                        </span>
+                        <span className={styles.sessionTime}>{formatTime(session.createdAt)}</span>
+                      </span>
+                    </div>
+                  )
+                })
+              : null}
+          </div>
+          {!selectedSessionId && !sessionsLoading && !sessionsError ? (
+            <div className={styles.hint}>从上方列表选择一个会话后自动生成交接摘要。</div>
+          ) : null}
+        </div>
+
         <div className={styles.status}>
-          {generating ? <Spinner label="正在生成当前会话的交接摘要…" /> : null}
+          {generating ? <Spinner label="正在生成所选会话的交接摘要…" /> : null}
           {!generating && generateError ? (
             <div className={styles.error}>
               <span>{generateError}</span>
-              {sessionId ? (
-                <Button variant="ghost" size="sm" onClick={() => void generate(sessionId)}>
+              {selectedSessionId ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    // 手动重试 = 用户明确要求重新生成：重置脏标记允许结果覆盖
+                    dirtyRef.current = false
+                    void generate(selectedSessionId)
+                  }}
+                >
                   重试
                 </Button>
               ) : null}

@@ -168,6 +168,12 @@
   background: var(--dsw-alias-success-default, #00a870);
 }
 
+/* 输出 Token（堆叠上段）：输入 Token 同色降透明度，构成同一度量的两段。 */
+.legendTokensOut {
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+  opacity: 0.45;
+}
+
 .chart {
   display: flex;
   align-items: stretch;
@@ -210,6 +216,29 @@
 
 .barCost {
   background: var(--dsw-alias-success-default, #00a870);
+}
+
+/* 堆叠 Token 柱：容器纵向底部对齐，输出段在上、输入段在下。 */
+.barTokensStack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 10px;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  overflow: hidden;
+}
+
+.barTokensOut {
+  width: 100%;
+  min-height: 0;
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+  opacity: 0.45;
+}
+
+.barTokensStack .barTokens {
+  width: 100%;
+  border-radius: 0;
 }
 
 .chartLabel {
@@ -279,4 +308,145 @@
 .hint {
   font-size: 12px;
   color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 模型费用排行（水平占比条） */
+/* ------------------------------------------------------------------------- */
+
+.modelRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.modelName {
+  font-size: 13px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modelBarTrack {
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+}
+
+.modelBar {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+  transition: width 0.3s ease;
+}
+
+.modelStats {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------------- */
+/* 缓存命中结构（水平堆叠条） */
+/* ------------------------------------------------------------------------- */
+
+.cacheRate {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--dsw-alias-success-default, #00a870);
+  font-variant-numeric: tabular-nums;
+}
+
+.cacheTrack {
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.cacheHit {
+  height: 100%;
+  background: var(--dsw-alias-success-default, #00a870);
+  transition: width 0.3s ease;
+}
+
+.cacheLegend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 峰谷 24 小时时间轴 */
+/* ------------------------------------------------------------------------- */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 520px;
+}
+
+.timelineTrack {
+  display: flex;
+  gap: 2px;
+  height: 20px;
+}
+
+.timelinePeak {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.timelineOff {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+}
+
+.timelineScale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 多厂商定价概览 */
+/* ------------------------------------------------------------------------- */
+
+.vendorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.vendorItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.vendorName {
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.vendorCount {
+  margin-left: auto;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  font-variant-numeric: tabular-nums;
 }

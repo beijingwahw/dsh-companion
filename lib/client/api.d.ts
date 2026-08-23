@@ -45,6 +45,20 @@ export type ExportFormat = 'markdown' | 'pdf' | 'json' | 'png';
 export interface ExportSessionsResponse {
     readonly sessions: readonly SessionRecord[];
 }
+/** 回合选择面板的单回合预览（`GET /export/turns` 响应项）。 */
+export interface ExportTurnSummary {
+    /** 回合在列表中的下标（0 起），导出请求的 turns 数组引用该值。 */
+    readonly index: number;
+    readonly role: 'user' | 'assistant' | 'system' | 'tool';
+    /** 回合事件时间（毫秒时间戳）。 */
+    readonly time: number;
+    /** 折叠空白后截断的纯文本预览。 */
+    readonly preview: string;
+}
+/** `GET /export/turns` 响应（回合选择面板数据源）。 */
+export interface ExportTurnsResponse {
+    readonly turns: readonly ExportTurnSummary[];
+}
 /** `POST /export/run` 请求体。 */
 export interface ExportRunRequest {
     readonly sessionId: string;
@@ -53,6 +67,11 @@ export interface ExportRunRequest {
     readonly timestamps?: boolean;
     /** 缺省为 false。 */
     readonly redact?: boolean;
+    /**
+     * 仅导出选中的回合（回合在回合列表中的下标）；省略 = 导出全部回合。
+     * 全选状态省略该字段，请求体最小。
+     */
+    readonly turns?: readonly number[];
 }
 /** 导出结果为文件：base64 内容 + 文件名 + MIME。 */
 export interface ExportFileResult {
@@ -96,6 +115,8 @@ export interface ExportBatchResponse {
 }
 /** 列出可导出的会话。 */
 export declare function fetchExportSessions(options?: RequestOptions): Promise<ExportSessionsResponse>;
+/** 列出会话的回合预览（回合选择面板数据源）。 */
+export declare function fetchExportTurns(sessionId: string, options?: RequestOptions): Promise<ExportTurnsResponse>;
 /** 导出单个会话。 */
 export declare function runExport(request: ExportRunRequest, options?: RequestOptions): Promise<ExportRunResponse>;
 /** 批量导出多个会话为 ZIP。 */
@@ -226,6 +247,8 @@ export interface CostBudgetState {
     readonly ratio: number;
     /** 任一档预算用尽后是否已暂停 API 调用。 */
     readonly paused: boolean;
+    /** 在途预授权合计（元，调用期权协议的预留总额）。 */
+    readonly reservedCny?: number;
 }
 /** `GET /cost/state` 响应。 */
 export interface CostState {

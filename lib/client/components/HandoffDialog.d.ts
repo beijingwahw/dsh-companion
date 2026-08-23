@@ -6,5 +6,5 @@ export interface HandoffDialogProps {
     readonly open: boolean;
     readonly onClose: () => void;
 }
-/** 交接摘要对话框：生成/编辑摘要 + 模板管理 + 武装到新对话。 */
+/** 交接摘要对话框：会话选择 + 生成/编辑摘要 + 模板管理 + 武装到新对话。 */
 export declare function HandoffDialog(props: HandoffDialogProps): ReactElement;

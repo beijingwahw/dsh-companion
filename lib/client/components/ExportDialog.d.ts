@@ -6,5 +6,5 @@ export interface ExportDialogProps {
     readonly open: boolean;
     readonly onClose: () => void;
 }
-/** 导出对话框：格式/选项 + 批量会话多选 + 加载态与 Toast 反馈。 */
+/** 导出对话框：格式/选项 + 回合级选择 + 批量会话多选 + 加载态与 Toast 反馈。 */
 export declare function ExportDialog(props: ExportDialogProps): ReactElement;

@@ -1,4 +1,6 @@
 /* 导出对话框样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值），不写全局样式。 */
+/* 回合选择面板视觉吸收自 dsh-conv-export：勾选行高亮、角色徽章分色（用户蓝 / */
+/* 助手绿）、两行截断预览、已选计数；批量选择界面复用同一套视觉语言。 */
 
 .body {
   display: flex;
@@ -30,6 +32,151 @@
   background: var(--dsw-alias-bg-muted, #f5f6f7);
 }
 
+/* ------------------------------------------------------------------------- */
+/* 回合选择面板（吸收自 dsh-conv-export 的回合级选择导出） */
+/* ------------------------------------------------------------------------- */
+
+.turnSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.turnToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.turnSectionLabel {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.turnToolbarButtons {
+  display: flex;
+  gap: 4px;
+}
+
+.turnCount {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  font-variant-numeric: tabular-nums;
+}
+
+.turnList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+}
+
+/* 勾选行高亮（conv-export 的 :has(input:checked) 视觉，React 下按状态加类）。 */
+.turnItem {
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  /* 未勾选行整体淡化，强化与勾选行的对比（conv-export 面板语义）。 */
+}
+
+.turnItem .turnMeta {
+  opacity: 0.55;
+}
+
+.turnItem:hover {
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.turnItemChecked {
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+}
+
+.turnMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 角色徽章分色：用户蓝（品牌）、助手绿（成功）、其余中性。 */
+.turnBadgeUser,
+.turnBadgeAssistant,
+.turnBadgeOther {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.turnBadgeUser {
+  background: var(--dsw-alias-brand-default, #3b82f6);
+}
+
+.turnBadgeAssistant {
+  background: var(--dsw-alias-success-default, #10b981);
+}
+
+.turnPreview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.turnTime {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 批量选择可视化界面（对齐回合选择面板的工具栏 + 筛选 + 勾选视觉） */
+/* ------------------------------------------------------------------------- */
+
+.sessionSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sessionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessionSectionLabel {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.sessionToolbarButtons {
+  display: flex;
+  gap: 4px;
+}
+
+.sessionCount {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  font-variant-numeric: tabular-nums;
+}
+
 .sessionList {
   display: flex;
   flex-direction: column;
@@ -41,13 +188,26 @@
   border-radius: 8px;
 }
 
+/* 未勾选行：透明边框占位 + 内容淡化，保持与勾选行的对比。 */
 .sessionItem {
   padding: 6px 8px;
+  border: 1px solid transparent;
   border-radius: 6px;
+}
+
+.sessionItem .sessionMeta {
+  opacity: 0.55;
 }
 
 .sessionItem:hover {
   background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.sessionItemChecked {
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
 }
 
 .sessionMeta {

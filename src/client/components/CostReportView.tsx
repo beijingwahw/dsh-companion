@@ -1,14 +1,19 @@
 /**
- * 成本报表视图页（模块 C 客户端 UI，挂载于 conversation.view）：
+ * 成本报表视图页（模块 C 客户端 UI，挂载于 conversation.view）——详尽可视化面板：
  * - GET /cost/state 与 GET /cost/report?from&to（默认近 7 天，可切换 7/28 天）；
- * - 开发者模式总开关与 API Key 管理（type=password 输入 + 保存/删除/测试连接）；
- * - 峰谷调度、模型路由开关与日/月双档预算（POST /cost/settings 稀疏补丁）；
- * - 预算进度条（spent/budget，80% 黄、100% 红）；
- * - 动态计价信息区：定价来源（官方实时/内置快照）、抓取时间、峰谷计划，
- *   支持手动触发官方定价页刷新（POST /cost/pricing/refresh）；
- * - 每日 Token/费用以纯 CSS 条形图呈现（div 高度比例，不依赖图表库）；
- * - 汇总卡片：调用数、Token、费用、节省金额、延迟执行数；
+ * - 汇总卡片：调用数、Token 总量、费用、节省金额、延迟执行数、缓存命中率、
+ *   日均费用、峰值日（后四项从报表数据派生）；
+ * - 预算控制：日/月双档进度条（80% 黄、100% 红）+ 在途预授权合计展示；
+ * - 每日 Token/费用条形图：Token 柱拆分为输入（实心）/输出（半透明）堆叠；
+ * - 每日费用与节省对比图：费用柱（品牌色）与节省柱（绿色）并排；
+ * - 模型费用排行：byModel 聚合的水平占比条（Top 7 + 其他合计）；
+ * - 缓存命中结构：命中（绿）/未命中（品牌色）水平堆叠条 + 命中率；
+ * - 动态计价信息区：定价来源、抓取时间、峰谷 24 小时时间轴（高峰段高亮）、
+ *   多厂商定价概览（厂商 + 模型数 + live/builtin/override 来源徽章），
+ *   支持手动触发官方定价页刷新；
+ * - 开发者模式总开关与 API Key 管理；峰谷调度、模型路由开关；
  * - 每 60s 轮询 /cost/state，paused 变化时 Toast 预警。
+ * 全部图表为纯 CSS（div 宽高比例），不依赖任何图表库。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -320,7 +325,11 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
   const days = report?.days ?? []
   const maxTokens = Math.max(1, ...days.map((d) => d.promptTokens + d.completionTokens))
   const maxCost = Math.max(0.0001, ...days.map((d) => d.costCny))
+  const maxSaved = Math.max(0.0001, ...days.map((d) => d.savedCny))
+  /** 有调用的天数（日均费用的分母，空天数不计）。 */
+  const activeDayCount = days.filter((d) => d.calls > 0).length
 
+  /** 汇总卡片：调用数 / Token / 费用 / 节省 / 延迟 + 派生指标（缓存命中率、日均费用、峰值日）。 */
   const summaryCards: ReadonlyArray<{ readonly label: string; readonly value: string }> = report
     ? [
         { label: '调用数', value: `${report.total.calls}` },
@@ -331,8 +340,103 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
         { label: '费用（元）', value: formatCny(report.total.costCny) },
         { label: '节省金额（元）', value: formatCny(report.total.savedCny) },
         { label: '延迟执行数', value: `${report.total.deferredCalls}` },
+        {
+          label: '缓存命中率',
+          value:
+            report.total.promptTokens > 0
+              ? `${Math.round((report.total.cacheHitTokens / report.total.promptTokens) * 1000) / 10}%`
+              : '—',
+        },
+        {
+          label: '日均费用（元）',
+          value: activeDayCount > 0 ? formatCny(report.total.costCny / activeDayCount) : '—',
+        },
+        {
+          label: '峰值日',
+          value:
+            days.length > 0
+              ? `${days.reduce((a, b) => (b.costCny > a.costCny ? b : a)).day.slice(5)}（${formatCny(
+                  days.reduce((a, b) => (b.costCny > a.costCny ? b : a)).costCny,
+                )}）`
+              : '—',
+        },
       ]
     : []
+
+  /** 缓存命中结构（输入 Token 的命中/未命中占比）。 */
+  const cacheHit =
+    report && report.total.promptTokens > 0
+      ? {
+          hit: report.total.cacheHitTokens,
+          miss: report.total.promptTokens - report.total.cacheHitTokens,
+          rate: report.total.cacheHitTokens / report.total.promptTokens,
+        }
+      : null
+
+  /** 模型费用聚合行（byModel 跨天累加，按费用降序）。 */
+  interface ModelRow {
+    readonly model: string
+    readonly calls: number
+    readonly tokens: number
+    readonly costCny: number
+  }
+  const modelAgg = new Map<string, { calls: number; tokens: number; costCny: number }>()
+  for (const day of days) {
+    for (const [model, slice] of Object.entries(day.byModel)) {
+      const entry = modelAgg.get(model) ?? { calls: 0, tokens: 0, costCny: 0 }
+      entry.calls += slice.calls
+      entry.tokens += slice.promptTokens + slice.completionTokens
+      entry.costCny += slice.costCny
+      modelAgg.set(model, entry)
+    }
+  }
+  const modelList: readonly ModelRow[] = [...modelAgg.entries()]
+    .map(([model, agg]) => ({ model, ...agg }))
+    .sort((a, b) => b.costCny - a.costCny)
+  /** 排行榜展示上限：Top 7 + 其余合并为「其他」。 */
+  const MODEL_RANK_LIMIT = 7
+  const modelTop = modelList.slice(0, MODEL_RANK_LIMIT)
+  const modelRest = modelList.slice(MODEL_RANK_LIMIT)
+  const modelRows: readonly ModelRow[] =
+    modelRest.length > 0
+      ? [
+          ...modelTop,
+          {
+            model: `其他（${modelRest.length} 个模型）`,
+            calls: modelRest.reduce((sum, row) => sum + row.calls, 0),
+            tokens: modelRest.reduce((sum, row) => sum + row.tokens, 0),
+            costCny: modelRest.reduce((sum, row) => sum + row.costCny, 0),
+          },
+        ]
+      : modelTop
+  const maxModelCost = Math.max(0.0001, ...modelRows.map((row) => row.costCny))
+  const totalModelCost = Math.max(0.0001, modelList.reduce((sum, row) => sum + row.costCny, 0))
+
+  /** 峰谷时间轴（24 格，每格 1 小时；窗口支持小数小时，按覆盖判定）。 */
+  const peakWindows =
+    pricing?.scheduled !== undefined && pricing.scheduled !== null
+      ? (pricing.scheduled.peakWindows ?? [[9, 12], [14, 18]])
+      : null
+  const peakHours: readonly boolean[] =
+    peakWindows !== null
+      ? Array.from({ length: 24 }, (_, hour) =>
+          peakWindows.some(([start, end]) => (start <= end ? hour >= start && hour < end : hour >= start || hour < end)),
+        )
+      : []
+
+  /** 多厂商定价概览行（pricing.vendors 面板数据）。 */
+  const vendorRows: ReadonlyArray<{
+    readonly id: string
+    readonly label: string
+    readonly count: number
+    readonly source: 'live' | 'builtin' | 'override'
+  }> =
+    pricing?.vendors.map((vendor) => ({
+      id: vendor.id,
+      label: vendor.label,
+      count: Object.keys(vendor.models).length,
+      source: vendor.source,
+    })) ?? []
 
   const devMode = costState?.devMode ?? false
 
@@ -382,6 +486,13 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
             预算控制
             {budget.paused ? <Pill className={styles.pausedBadge}>已暂停调用</Pill> : null}
           </h3>
+
+          {/* 在途预授权（调用期权协议的预留合计，从可用额度中锁定） */}
+          {budget.reservedCny !== undefined && budget.reservedCny > 0 ? (
+            <div className={styles.hint}>
+              在途调用预授权：{formatCny(budget.reservedCny)}（该额度已被进行中的 API 调用预留锁定）
+            </div>
+          ) : null}
 
           {/* 日预算档 */}
           <div className={styles.budgetRow}>
@@ -458,6 +569,101 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
         </div>
       ) : null}
 
+      {/* 每日费用与节省对比（费用柱品牌色 + 节省柱绿色） */}
+      {report ? (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>每日费用与节省</h3>
+          <div className={styles.chartLegend}>
+            <span>
+              <i className={`${styles.legendDot} ${styles.legendTokens}`} />
+              实际费用（元）
+            </span>
+            <span>
+              <i className={`${styles.legendDot} ${styles.legendCost}`} />
+              节省金额（元）
+            </span>
+          </div>
+          {days.length === 0 ? (
+            <div className={styles.empty}>该时间范围内暂无用量记录</div>
+          ) : (
+            <div className={styles.chart}>
+              {days.map((day) => {
+                const costPct = Math.round((day.costCny / maxCost) * 100)
+                const savedPct = Math.round((day.savedCny / maxSaved) * 100)
+                return (
+                  <div
+                    key={day.day}
+                    className={styles.chartDay}
+                    title={`${day.day}：费用 ${formatCny(day.costCny)} / 节省 ${formatCny(day.savedCny)} / 延迟执行 ${day.deferredCalls} 次`}
+                  >
+                    <div className={styles.chartBars}>
+                      <div className={styles.barTokens} style={{ height: `${costPct}%` }} />
+                      <div className={styles.barCost} style={{ height: `${savedPct}%` }} />
+                    </div>
+                    <span className={styles.chartLabel}>{day.day.slice(5)}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {report.total.savedCny > 0 ? (
+            <div className={styles.hint}>
+              区间累计节省 {formatCny(report.total.savedCny)}
+              （模型路由改用更经济的模型 + 峰谷调度延迟至空闲时段）
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* 模型费用排行（byModel 聚合的水平占比条） */}
+      {report && modelRows.length > 0 ? (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>模型费用排行</h3>
+          {modelRows.map((row) => {
+            const widthPct = Math.max(2, Math.round((row.costCny / maxModelCost) * 100))
+            const share = Math.round((row.costCny / totalModelCost) * 1000) / 10
+            return (
+              <div
+                key={row.model}
+                className={styles.modelRow}
+                title={`${row.model}：费用 ${formatCny(row.costCny)} / 调用 ${row.calls} 次 / Token ${row.tokens.toLocaleString('zh-CN')}`}
+              >
+                <span className={styles.modelName}>{row.model}</span>
+                <div className={styles.modelBarTrack}>
+                  <div className={styles.modelBar} style={{ width: `${widthPct}%` }} />
+                </div>
+                <span className={styles.modelStats}>
+                  {formatCny(row.costCny)} · {row.calls} 次 · {share}%
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+
+      {/* 缓存命中结构（输入 Token 命中/未命中占比） */}
+      {cacheHit ? (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>
+            缓存命中
+            <span className={styles.cacheRate}>{Math.round(cacheHit.rate * 1000) / 10}%</span>
+          </h3>
+          <div className={styles.cacheTrack}>
+            <div className={styles.cacheHit} style={{ width: `${cacheHit.rate * 100}%` }} />
+          </div>
+          <div className={styles.cacheLegend}>
+            <span>
+              <i className={`${styles.legendDot} ${styles.legendCost}`} />
+              命中 {cacheHit.hit.toLocaleString('zh-CN')} tokens（按折扣价计费）
+            </span>
+            <span>
+              <i className={`${styles.legendDot} ${styles.legendTokens}`} />
+              未命中 {cacheHit.miss.toLocaleString('zh-CN')} tokens（按全价计费）
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       {/* 动态计价信息（官方定价页实时抓取 + 峰谷分时） */}
       {pricing ? (
         <div className={styles.section}>
@@ -472,14 +678,53 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
             {pricingFetchedText ? <span className={styles.hint}>抓取于 {pricingFetchedText}</span> : null}
           </div>
           {pricing.scheduled !== null ? (
-            <div className={styles.hint}>
-              峰谷分时定价自 {pricing.scheduled.effective} 生效
-              {peakWindowsText ? `（北京时间高峰 ${peakWindowsText} 按高峰价计费）` : ''}
-            </div>
+            <>
+              <div className={styles.hint}>
+                峰谷分时定价自 {pricing.scheduled.effective} 生效
+                {peakWindowsText ? `（北京时间高峰 ${peakWindowsText} 按高峰价计费）` : ''}
+              </div>
+              {/* 峰谷 24 小时时间轴：高峰格品牌色高亮，支持跨午夜窗口 */}
+              <div className={styles.timeline}>
+                <div className={styles.timelineTrack}>
+                  {peakHours.map((isPeak, hour) => (
+                    <div
+                      key={hour}
+                      className={isPeak ? styles.timelinePeak : styles.timelineOff}
+                      title={`${hour}:00 - ${hour + 1}:00（北京时间）${isPeak ? ' · 高峰' : ' · 空闲'}`}
+                    />
+                  ))}
+                </div>
+                <div className={styles.timelineScale}>
+                  <span>0 点</span>
+                  <span>6 点</span>
+                  <span>12 点</span>
+                  <span>18 点</span>
+                  <span>24 点</span>
+                </div>
+              </div>
+            </>
           ) : null}
           <div className={styles.hint}>
             每小时自动抓取 DeepSeek 与国产厂商官方定价页，新模型与调价自动导入；缓存命中按折扣价计费。
           </div>
+          {/* 多厂商定价概览：厂商 + 已收录模型数 + 来源徽章 */}
+          {vendorRows.length > 0 ? (
+            <div className={styles.vendorGrid}>
+              {vendorRows.map((vendor) => (
+                <div key={vendor.id} className={styles.vendorItem}>
+                  <span className={styles.vendorName}>{vendor.label}</span>
+                  <span className={styles.vendorCount}>{vendor.count} 个模型</span>
+                  {vendor.source === 'live' ? (
+                    <Pill className={styles.okBadge}>官方实时</Pill>
+                  ) : vendor.source === 'override' ? (
+                    <Pill className={styles.pausedBadge}>自定义</Pill>
+                  ) : (
+                    <Pill className={styles.warnBadge}>内置快照</Pill>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
           <div className={styles.budgetEdit}>
             <Button
               variant="secondary"
@@ -493,14 +738,18 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
         </div>
       ) : null}
 
-      {/* 每日 Token / 费用条形图（纯 CSS，高度按比例） */}
+      {/* 每日 Token / 费用条形图（Token 柱拆分输入/输出堆叠；纯 CSS，高度按比例） */}
       {report ? (
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>每日 Token / 费用</h3>
           <div className={styles.chartLegend}>
             <span>
               <i className={`${styles.legendDot} ${styles.legendTokens}`} />
-              Token
+              输入 Token
+            </span>
+            <span>
+              <i className={`${styles.legendDot} ${styles.legendTokensOut}`} />
+              输出 Token
             </span>
             <span>
               <i className={`${styles.legendDot} ${styles.legendCost}`} />
@@ -515,14 +764,20 @@ export function CostReportView(_props: CostReportViewProps): ReactElement {
                 const tokens = day.promptTokens + day.completionTokens
                 const tokenPct = Math.round((tokens / maxTokens) * 100)
                 const costPct = Math.round((day.costCny / maxCost) * 100)
+                const inPct = tokens > 0 ? (day.promptTokens / tokens) * tokenPct : 0
+                const outPct = tokens > 0 ? (day.completionTokens / tokens) * tokenPct : 0
                 return (
                   <div
                     key={day.day}
                     className={styles.chartDay}
-                    title={`${day.day}：Token ${tokens.toLocaleString('zh-CN')} / 费用 ${formatCny(day.costCny)} / 调用 ${day.calls} 次`}
+                    title={`${day.day}：输入 ${day.promptTokens.toLocaleString('zh-CN')} / 输出 ${day.completionTokens.toLocaleString('zh-CN')} tokens / 费用 ${formatCny(day.costCny)} / 调用 ${day.calls} 次`}
                   >
                     <div className={styles.chartBars}>
-                      <div className={styles.barTokens} style={{ height: `${tokenPct}%` }} />
+                      {/* 堆叠 Token 柱：输出段在上（半透明）、输入段在下（实心） */}
+                      <div className={styles.barTokensStack}>
+                        <div className={styles.barTokensOut} style={{ height: `${outPct}%` }} />
+                        <div className={styles.barTokens} style={{ height: `${inPct}%` }} />
+                      </div>
                       <div className={styles.barCost} style={{ height: `${costPct}%` }} />
                     </div>
                     <span className={styles.chartLabel}>{day.day.slice(5)}</span>

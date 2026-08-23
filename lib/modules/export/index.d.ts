@@ -1,9 +1,9 @@
 /**
  * 模块 A：对话智能导出插件。
  *
- * 经 ctx.companion.http 注册三个私有端点（GET /export/sessions、
- * POST /export/run、POST /export/batch），经 ctx.commands 注册
- * `export` 与 `export-batch` 两个命令。HTTP 与命令复用 ./service.js
+ * 经 ctx.companion.http 注册四个私有端点（GET /export/sessions、
+ * GET /export/turns、POST /export/run、POST /export/batch），经 ctx.commands
+ * 注册 `export` 与 `export-batch` 两个命令。HTTP 与命令复用 ./service.js
  * 的同一套服务函数，不重复实现逻辑（DESIGN.md 第 5 节）。
  * 全部注册经 ctx.effect，随插件卸载自动回卷；错误一律收敛为
  * HttpError / 用户可读文本，不泄漏内部细节。

@@ -1,9 +1,9 @@
 /**
  * 模块 A：对话智能导出插件。
  *
- * 经 ctx.companion.http 注册三个私有端点（GET /export/sessions、
- * POST /export/run、POST /export/batch），经 ctx.commands 注册
- * `export` 与 `export-batch` 两个命令。HTTP 与命令复用 ./service.js
+ * 经 ctx.companion.http 注册四个私有端点（GET /export/sessions、
+ * GET /export/turns、POST /export/run、POST /export/batch），经 ctx.commands
+ * 注册 `export` 与 `export-batch` 两个命令。HTTP 与命令复用 ./service.js
  * 的同一套服务函数，不重复实现逻辑（DESIGN.md 第 5 节）。
  * 全部注册经 ctx.effect，随插件卸载自动回卷；错误一律收敛为
  * HttpError / 用户可读文本，不泄漏内部细节。
@@ -15,6 +15,7 @@ import type { CommandInvocation, CommandResult } from '../../types/harness.js'
 import {
   buildBatchExport,
   buildSingleExport,
+  listTurns,
   toSafeHttpError,
   userFacingMessage,
   type ExportFormat,
@@ -52,6 +53,8 @@ export function apply(ctx: Context): void {
       // 单会话导出：响应为 file（base64）、print（html）或 raster（客户端光栅）。
       // HTTP 客户端具备 canvas 光栅能力，统一开启：PNG 长图与含 CJK 的 PDF
       // 由客户端光栅化成品，全程无 window.print() 对话框。
+      // turns 字段（可选）：回合选择面板的选中回合下标，仅导出选中回合
+      // （能力吸收自 dsh-conv-export 的回合级选择导出）。
       ctx.companion.http.add('POST', '/export/run', async (_req, res, hctx) => {
         try {
           const { sessionId, options } = parseRunBody(hctx.body)
@@ -62,6 +65,17 @@ export function apply(ctx: Context): void {
           sendJson(res, 200, payload)
         } catch (error) {
           throw toSafeHttpError(error, '导出会话失败')
+        }
+      }),
+
+      // 回合预览列表：回合选择面板数据源（角色 + 截断预览 + 时间）。
+      ctx.companion.http.add('GET', '/export/turns', async (_req, res, hctx) => {
+        try {
+          const sessionId = parseSessionId(hctx.query.get('sessionId'))
+          const payload = await listTurns(ctx.sessionQuery, sessionId)
+          sendJson(res, 200, payload)
+        } catch (error) {
+          throw toSafeHttpError(error, '获取回合列表失败')
         }
       }),
 
@@ -138,6 +152,35 @@ function bodyAsRecord(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>
 }
 
+/** 解析必填的会话 id（查询参数或请求体通用）。 */
+function parseSessionId(value: string | null | undefined): SessionId {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new HttpError('sessionId 必填')
+  }
+  return SessionId(value.trim())
+}
+
+/**
+ * 解析可选的回合下标数组（回合级选择导出）：
+ * - 缺省/undefined → undefined（导出全部回合）；
+ * - 必须为非空数组且全部为非负整数，违例 400；
+ * - 去重升序规范化（服务端过滤按下标匹配，顺序不影响结果）。
+ */
+function parseTurns(value: unknown): readonly number[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new HttpError('turns 必须是非空的回合下标数组（导出全部回合时请省略该字段）')
+  }
+  const indices: number[] = []
+  for (const item of value as readonly unknown[]) {
+    if (typeof item !== 'number' || !Number.isInteger(item) || item < 0) {
+      throw new HttpError('turns 必须全部为非负整数（回合在回合列表中的下标）')
+    }
+    indices.push(item)
+  }
+  return [...new Set(indices)].sort((a, b) => a - b)
+}
+
 /** 解析必填的格式字段。 */
 function parseFormat(value: unknown): ExportFormat {
   if (typeof value === 'string' && isExportFormat(value)) return value
@@ -163,6 +206,7 @@ function parseRunBody(body: unknown): { sessionId: SessionId; options: ExportOpt
       format: parseFormat(record.format),
       timestamps: parseFlag(record.timestamps, 'timestamps', true),
       redact: parseFlag(record.redact, 'redact', false),
+      turns: parseTurns(record.turns),
     },
   }
 }

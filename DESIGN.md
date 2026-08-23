@@ -87,13 +87,21 @@ export function apply(ctx: Context): void {
 
 ### 模块 A（export）
 - `GET  /export/sessions` → `{ sessions: SessionRecord[] }`
-- `POST /export/run` `{ sessionId, format: 'markdown'|'pdf'|'json'|'png', timestamps?=true, redact?=false }`
+- `GET  /export/turns?sessionId=` → `{ turns: [{ index, role, time, preview }] }`
+  （回合选择面板数据源：index 为回合下标（0 起，与导出请求的 turns 数组对应）、
+  preview 为折叠空白后截断 160 字符的纯文本预览。）
+- `POST /export/run` `{ sessionId, format: 'markdown'|'pdf'|'json'|'png', timestamps?=true, redact?=false, turns?: number[] }`
   → `{ kind: 'file', fileName, mimeType, contentBase64 }`
   或 `{ kind: 'raster', target: 'png'|'pdf', fileName, html }`（客户端 canvas 光栅化：
   PNG 长图，或含非 Latin-1 字符的 PDF——免打印多页 PDF，无 window.print() 对话框）
   或（无光栅能力时的降级路径）`{ kind: 'print', fileName, html }`。
   HTTP 端点一律以 `raster: true` 调用服务函数（浏览器具备 canvas）；
   `format: 'png'` 仅光栅路径可用，命令面板（无 canvas）→ `400` 可读文案。
+- `POST /export/run` 的 `turns`（回合级选择，吸收自 dsh-conv-export）：
+  非空非负整数数组（去重升序规范化），违例 `400`；省略 = 导出全部回合
+  （客户端全选状态省略该字段，请求体最小）；越界下标静默忽略
+  （append-only 日志下旧回合下标稳定，宽容处理列表与导出间的漂移）；
+  过滤后无可导出回合 → `400`。批量导出不支持该字段。
 - `POST /export/batch` `{ sessionIds: string[], format, timestamps?, redact? }`
   → `{ kind: 'file', fileName, mimeType: 'application/zip', contentBase64 }`
   `sessionIds` 先去重，去重后超过 `MAX_BATCH_SESSIONS`（100）→ `400`；
@@ -238,6 +246,11 @@ export function apply(ctx: Context): void {
 
 导出模块（模块 A）行为契约：
 
+- **回合级选择导出**（吸收自 dsh-conv-export）：`GET /export/turns` 的下标与
+  `transcriptFromLog` 输出顺序一致（按 seq 稳定排序）；append-only 日志下
+  旧回合下标不漂移，新回合只追加在列表末尾。客户端默认全选（此时导出请求
+  省略 turns 字段）；部分选择传选中下标，导出内容的元信息（消息轮次等）
+  自动反映过滤后的回合集合。批量导出与命令面板不参与回合选择。
 - **光栅路径归属**：PNG 长图与含非 Latin-1 字符的 PDF 由客户端 canvas 光栅化（kind:'raster'），
   服务端只产出打印 HTML；命令面板等无 canvas 环境：PNG → 400 可读文案，PDF → kind:'print' 降级。
 - **批量纪律**：批量打包在服务端完成，强制 raster=false；PNG 不支持批量（400）；
