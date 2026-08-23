@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { Button, Modal, Pill, Spinner, Textarea, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
 import { dismissArmedHandoff, fetchArmedHandoffs, importHandoff } from '../api.js'
-import type { ArmedHandoff } from '../api.js'
+import type { ArmedHandoff, HandoffReceipt } from '../api.js'
 import styles from './ImportSummaryDock.module.css'
 
 /** 组件 props：sessionId 由 slot 的 inject 注入。 */
@@ -28,6 +28,7 @@ export function ImportSummaryDock(props: ImportSummaryDockProps): ReactElement {
   const [summary, setSummary] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [armed, setArmed] = useState<readonly ArmedHandoff[]>([])
+  const [receipts, setReceipts] = useState<readonly HandoffReceipt[]>([])
   const [armedLoading, setArmedLoading] = useState(false)
   const [armedError, setArmedError] = useState('')
   const [removing, setRemoving] = useState(false)
@@ -50,6 +51,7 @@ export function ImportSummaryDock(props: ImportSummaryDockProps): ReactElement {
       const response = await fetchArmedHandoffs()
       if (!mountedRef.current) return
       setArmed(response.armed)
+      setReceipts(response.receipts ?? [])
       setArmedError('')
     } catch (error) {
       if (!mountedRef.current) return
@@ -149,6 +151,18 @@ export function ImportSummaryDock(props: ImportSummaryDockProps): ReactElement {
           </Button>
         </div>
       ))}
+
+      {receipts.length > 0 ? (
+        <div
+          className={styles.receipt}
+          title={`交接摘要已于 ${new Date(receipts[0]!.injectedAt).toLocaleString()} 注入会话 ${receipts[0]!.sessionId}`}
+        >
+          <Pill className={styles.receiptBadge}>已注入</Pill>
+          <span className={styles.receiptSummary}>
+            会话 {truncate(receipts[0]!.sessionId, 24)}
+          </span>
+        </div>
+      ) : null}
 
       <div className={styles.spacer} />
 

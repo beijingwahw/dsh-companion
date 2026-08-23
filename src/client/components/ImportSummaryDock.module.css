@@ -39,6 +39,28 @@
   color: var(--dsw-alias-text-secondary, #646a73);
 }
 
+.receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-base, #ffffff);
+}
+
+.receiptBadge {
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.receiptSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
 .spacer {
   flex: 1;
 }

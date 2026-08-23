@@ -33,6 +33,9 @@ const TRANSCRIPT_CHAR_BUDGET = 60_000
 /** 转录截断时插入的中段提示行。 */
 const TRANSCRIPT_TRUNCATION_NOTICE = '\n\n【对话内容过长，已截断中间部分，仅保留首尾】\n\n'
 
+/** pending 武装有效期（毫秒）：超时未投递自动作废，防僵尸注入。 */
+const ARMED_TTL_MS = 24 * 3600_000
+
 /** 交接摘要生成结果。 */
 interface HandoffResult {
   summary: string
@@ -75,16 +78,35 @@ export function apply(ctx: Context): void {
               return renderHandoffSection(entry.summary)
             }
           }
+          // pending 武装只投递给有具体会话作用域的装配：
+          // 无作用域的全局/默认装配不消费摘要（防止误耗）。
+          if (assembly.scope === undefined || assembly.scope === null) return ''
           const pending = store.peekPending()
           if (!pending) return ''
-          // v0.1 近似：Harness 没有“新对话创建前”的钩子，这里把武装后的
-          // “下一次系统提示词装配”视为要武装的目标新对话——用户随后新建对话
-          // 时才会发生装配；返回摘要的同时经 queueMicrotask 标记已消费，
-          // 保证摘要只注入这一次装配。若恰好先发生别的装配（如重建旧对话），
-          // 摘要会注入到该次装配，此为 v0.1 的已知近似。
+          // 世代门闩——过期自清：超时未投递自动作废，防僵尸注入。
+          if (pending.expiresAt !== undefined && Date.now() > pending.expiresAt) {
+            queueMicrotask(() => {
+              void store.expirePending().catch(() => undefined)
+            })
+            return ''
+          }
+          // 世代门闩——快照判定：武装时刻已存在的会话（快照内）不投递，
+          // 旧会话无论怎么重建都免疫；旧格式记录（无快照）回退
+          // v0.1 近似：注入下一次系统提示词装配。
+          if (pending.knownSessions !== undefined && pending.knownSessions.includes(scopeText)) {
+            return ''
+          }
+          // 原子消费（保留既有并发正确性）+ 投递回执（dock 可观测）。
           queueMicrotask(() => {
             // 消费失败静默降级（摘要至多重复注入一次），避免未处理 rejection。
-            void store.consumePending().catch(() => undefined)
+            void store
+              .consumePending()
+              .then((summary) => {
+                if (summary !== undefined) {
+                  void store.writeReceipt(scopeText).catch(() => undefined)
+                }
+              })
+              .catch(() => undefined)
           })
           return renderHandoffSection(pending.summary)
         },
@@ -150,6 +172,23 @@ export function apply(ctx: Context): void {
     return { summary: result.content.trim(), model: result.model || 'deepseek-chat' }
   }
 
+  /**
+   * 武装摘要给下一个新对话（pending）：世代门闩——武装时刻快照全部
+   * 已知会话 ID，装配回调只向「快照之外」的会话投递（详见 armed.ts 头注释）。
+   * 快照失败（会话引擎异常）时退化为无快照记录（v0.1 近似），不阻塞武装。
+   */
+  async function armPending(summary: string): Promise<void> {
+    const stores = await storesReady
+    let knownSessions: string[] | undefined
+    try {
+      const sessions = await ctx.sessionQuery.listSessions()
+      knownSessions = sessions.map((session) => String(session.id))
+    } catch {
+      knownSessions = undefined
+    }
+    await stores.armed.arm(null, summary, { knownSessions, ttlMs: ARMED_TTL_MS })
+  }
+
   // ------------------------------------------------------------------
   // HTTP 端点（经 ctx.companion.http 挂载；注册即 effect）
   // ------------------------------------------------------------------
@@ -208,9 +247,13 @@ export function apply(ctx: Context): void {
         const record = readObject(body)
         const summary = requireString(record.summary, 'summary')
         const sessionId = optionalString(record.sessionId, 'sessionId')
-        const stores = await storesReady
-        // 无 sessionId = 武装给“下一个新对话”（pending）。
-        await stores.armed.arm(sessionId ?? null, summary)
+        // 无 sessionId = 武装给“下一个新对话”（pending，世代门闩）。
+        if (sessionId === undefined) {
+          await armPending(summary)
+        } else {
+          const stores = await storesReady
+          await stores.armed.arm(sessionId, summary)
+        }
         sendJson(res, 200, { ok: true, sessionId: sessionId ?? null })
       }),
     'companion.handoff-http-import',
@@ -220,7 +263,11 @@ export function apply(ctx: Context): void {
     () =>
       ctx.companion.http.add('GET', '/handoff/armed', async (_req, res) => {
         const stores = await storesReady
-        sendJson(res, 200, { armed: stores.armed.list() })
+        // receipts：pending 摘要的投递回执（dock 展示「已注入会话 X」）。
+        sendJson(res, 200, {
+          armed: stores.armed.list(),
+          receipts: stores.armed.listReceipts(),
+        })
       }),
     'companion.handoff-http-armed-list',
   )
@@ -276,9 +323,8 @@ export function apply(ctx: Context): void {
             return { kind: 'error', text: '请提供交接摘要全文作为命令输入' }
           }
           try {
-            const stores = await storesReady
-            await stores.armed.arm(null, summary)
-            return { kind: 'success', text: '交接摘要已武装：将注入下一个新对话的系统提示词。' }
+            await armPending(summary)
+            return { kind: 'success', text: '交接摘要已武装：将注入下一个新对话的系统提示词（24 小时内有效）。' }
           } catch (error) {
             return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
           }

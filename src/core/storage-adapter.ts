@@ -76,7 +76,7 @@ const ALL_TABLE_NAMES = [
   // core
   'vault-meta', 'vault', 'usage-daily',
   // handoff
-  'templates', 'handoff-armed',
+  'templates', 'handoff-armed', 'handoff-receipts',
   // cost
   'cost-extra', 'budget-state',
   // search

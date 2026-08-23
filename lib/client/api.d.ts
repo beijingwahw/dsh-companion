@@ -135,6 +135,13 @@ export interface ArmedHandoff {
 /** `GET /handoff/armed` 响应。 */
 export interface ArmedHandoffsResponse {
     readonly armed: readonly ArmedHandoff[];
+    /** pending 摘要的投递回执（世代门闩可观测性）。 */
+    readonly receipts?: readonly HandoffReceipt[];
+}
+/** pending 摘要的投递回执。 */
+export interface HandoffReceipt {
+    readonly sessionId: string;
+    readonly injectedAt: number;
 }
 /** `DELETE /handoff/armed` 请求体（缺省 sessionId 时移除全局武装）。 */
 export interface DismissArmedRequest {

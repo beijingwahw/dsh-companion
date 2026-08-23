@@ -5,13 +5,15 @@
  * 预算闸门（budget.check）→ 模型路由（modelRouting）→ 峰谷调度
  * （peakScheduling 且 priority='normal' → scheduler.enqueue；
  * 是否真实延迟以调度器返回值为准，网关不自行预判峰谷）
- * → ctx.companion.callDeepSeek(model)（记账与事件由核心服务完成）
+ * → invoke：调用期权协议（estimator 估算 → budget.reserve 预授权 →
+ *   ctx.companion.callDeepSeek → settle 结算 / 失败 release 释放）
  * → 节省额结算：仅当优化真实发生时计入 savedCny——
  *   modelRouting 开启且实际模型确比 complexModel 便宜时基线才取 complexModel，
  *   否则基线=实际模型（节省为 0）；deferredCalls 以调度器真实延迟为准。
  *   结算失败不反转已成功的调用结果：内部捕获并降级为 warning 通知。
- * 延迟队列在 drain 执行每个任务前经网关注入的预算复检回调复查闸门，
- * 暂停期间排队任务以预算不足错误被 reject，队列不构成闸门旁路。
+ * 预授权在任务真正执行（invoke）时锁定：排队任务在 drain 前仍由网关注入的
+ * 预算复检回调复查闸门，暂停期间排队任务以预算不足错误被 reject，
+ * 队列不构成闸门旁路；在途并发的额度竞争由预留协议收敛。
  * 开发者模式关闭时直通核心服务。
  *
  * 跨模块协作（如 handoff 生成摘要）经 ctx.get('companionCost') 使用本服务，
@@ -57,6 +59,7 @@ export declare class CostGatewayService extends Service implements CostGateway {
     readonly ctx: Context;
     private readonly router;
     private readonly scheduler;
+    private readonly estimator;
     private readonly getSettings;
     /** 预算守卫：存储域就绪后懒性创建；创建失败后重置，下次访问重试。 */
     private budgetGuardInstance;
@@ -69,6 +72,11 @@ export declare class CostGatewayService extends Service implements CostGateway {
     call(params: CostCallParams): Promise<ChatResult>;
     budgetState(): Promise<BudgetSnapshot>;
     queueSnapshot(): readonly QueuedTaskInfo[];
+    /**
+     * 一次成功调用的实际费用（元）：经动态计价引擎按调用完成时刻解析
+     * （峰谷分时感知），与核心服务记账、节省额结算同源同口径。
+     */
+    private actualCostOf;
     /**
      * 预算守卫就绪 Promise（懒性）：存储域就绪后创建；
      * 创建失败时挂兜底 catch 避免未处理 rejection，并重置内部 promise，

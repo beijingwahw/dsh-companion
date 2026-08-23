@@ -5,13 +5,15 @@
  * 预算闸门（budget.check）→ 模型路由（modelRouting）→ 峰谷调度
  * （peakScheduling 且 priority='normal' → scheduler.enqueue；
  * 是否真实延迟以调度器返回值为准，网关不自行预判峰谷）
- * → ctx.companion.callDeepSeek(model)（记账与事件由核心服务完成）
+ * → invoke：调用期权协议（estimator 估算 → budget.reserve 预授权 →
+ *   ctx.companion.callDeepSeek → settle 结算 / 失败 release 释放）
  * → 节省额结算：仅当优化真实发生时计入 savedCny——
  *   modelRouting 开启且实际模型确比 complexModel 便宜时基线才取 complexModel，
  *   否则基线=实际模型（节省为 0）；deferredCalls 以调度器真实延迟为准。
  *   结算失败不反转已成功的调用结果：内部捕获并降级为 warning 通知。
- * 延迟队列在 drain 执行每个任务前经网关注入的预算复检回调复查闸门，
- * 暂停期间排队任务以预算不足错误被 reject，队列不构成闸门旁路。
+ * 预授权在任务真正执行（invoke）时锁定：排队任务在 drain 前仍由网关注入的
+ * 预算复检回调复查闸门，暂停期间排队任务以预算不足错误被 reject，
+ * 队列不构成闸门旁路；在途并发的额度竞争由预留协议收敛。
  * 开发者模式关闭时直通核心服务。
  *
  * 跨模块协作（如 handoff 生成摘要）经 ctx.get('companionCost') 使用本服务，
@@ -24,6 +26,7 @@ import type { CallParams } from '../../core/service.js'
 import { beijingDayKey } from '../../core/time.js'
 import type { DailyUsage } from '../../core/usage.js'
 import { BudgetGuard, type BudgetSnapshot } from './budget.js'
+import { CostEstimator } from './estimator.js'
 import { ModelRouter } from './router.js'
 import { PeakScheduler, type QueuedTaskInfo } from './scheduler.js'
 import type { CostSettings } from './settings.js'
@@ -45,6 +48,9 @@ export interface CostCallParams {
   signal?: AbortSignal
 }
 
+/** 预留 TTL 相对 API 超时的缓冲（毫秒）：覆盖结算链路的尾部延迟。 */
+const RESERVATION_TTL_BUFFER_MS = 30_000
+
 /** ctx.companionCost 服务契约。 */
 export interface CostGateway {
   /** 经策略层发起一次 DeepSeek 调用。 */
@@ -65,6 +71,7 @@ declare module '@deepseek-ai/cordis' {
 export class CostGatewayService extends Service implements CostGateway {
   private readonly router = new ModelRouter()
   private readonly scheduler: PeakScheduler
+  private readonly estimator = new CostEstimator()
   private readonly getSettings: () => CostSettings
   /** 预算守卫：存储域就绪后懒性创建；创建失败后重置，下次访问重试。 */
   private budgetGuardInstance: BudgetGuard | undefined
@@ -120,8 +127,35 @@ export class CostGatewayService extends Service implements CostGateway {
 
     // 峰谷调度：仅 normal 优先级参与；是否真实延迟由调度器判定并返回
     // （空闲时段立即执行 deferred=false；高峰排队 deferred=true）。
+    // invoke 内嵌调用期权协议：估算 → 预授权 → 调用 → 结算/释放。
+    // 预授权在任务真正执行时锁定（排队期间由调度器复检闸门把关），
+    // 在途并发的额度竞争由预留协议收敛（详见 budget.ts 头注释）。
     const priority = params.priority ?? 'normal'
-    const invoke = (): Promise<ChatResult> => this.ctx.companion.callDeepSeek({ ...base, model })
+    const requestedModel = model ?? 'deepseek-chat'
+    const inputChars = countMessageChars(params.messages)
+    const invoke = async (): Promise<ChatResult> => {
+      const estimateCny = this.estimator.estimate(
+        requestedModel,
+        inputChars,
+        params.maxTokens,
+        this.ctx.companion.prices.resolve(requestedModel, Date.now()),
+      )
+      const reservation = guard.reserve(
+        estimateCny,
+        params.essential ?? false,
+        this.ctx.companion.config.apiTimeoutMs + RESERVATION_TTL_BUFFER_MS,
+      )
+      try {
+        const result = await this.ctx.companion.callDeepSeek({ ...base, model })
+        const actualCny = this.actualCostOf(result, requestedModel)
+        reservation.settle(actualCny)
+        this.estimator.observe(requestedModel, inputChars, actualCny)
+        return result
+      } catch (error) {
+        reservation.release()
+        throw error
+      }
+    }
     let result: ChatResult
     let deferred = false
     if (settings.peakScheduling && priority === 'normal') {
@@ -138,7 +172,7 @@ export class CostGatewayService extends Service implements CostGateway {
 
     // 节省额结算失败不得反转已成功的调用结果：降级为 warning 通知。
     try {
-      await this.recordSavings(result, model ?? 'deepseek-chat', settings, deferred)
+      await this.recordSavings(result, requestedModel, settings, deferred)
     } catch (error) {
       this.ctx.companion.notice(
         'warning',
@@ -155,6 +189,18 @@ export class CostGatewayService extends Service implements CostGateway {
 
   queueSnapshot(): readonly QueuedTaskInfo[] {
     return this.scheduler.queueSnapshot()
+  }
+
+  /**
+   * 一次成功调用的实际费用（元）：经动态计价引擎按调用完成时刻解析
+   * （峰谷分时感知），与核心服务记账、节省额结算同源同口径。
+   */
+  private actualCostOf(result: ChatResult, requestedModel: string): number {
+    return this.ctx.companion.prices.costOfCall(
+      result.model || requestedModel,
+      tokenUsageToUsageLike(result.usage),
+      Date.now(),
+    )
   }
 
   /**
@@ -195,8 +241,7 @@ export class CostGatewayService extends Service implements CostGateway {
     const prices = this.ctx.companion.prices
     const ts = Date.now()
     const usageLike = tokenUsageToUsageLike(result.usage)
-    const actualModel = result.model || requestedModel
-    const actualCny = prices.costOfCall(actualModel, usageLike, ts)
+    const actualCny = this.actualCostOf(result, requestedModel)
     // 基线缺省为实际模型（节省为 0）；仅当模型路由开启、
     // 且实际路由到的模型确比 complexModel 便宜时，才以 complexModel 为基线。
     let baselineCny = actualCny
@@ -228,4 +273,13 @@ export class CostGatewayService extends Service implements CostGateway {
       }
     })
   }
+}
+
+/** 统计消息总字符数（估值器的输入长度口径）。 */
+function countMessageChars(messages: readonly ChatMessage[]): number {
+  let total = 0
+  for (const message of messages) {
+    total += typeof message.content === 'string' ? message.content.length : 0
+  }
+  return total
 }

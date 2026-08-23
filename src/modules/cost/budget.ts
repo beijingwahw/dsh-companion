@@ -9,11 +9,18 @@
  * （键=北京日/月周期键）持久化，每周期每级只告警一次；
  * 进程内另以 Set 防并发重复。
  *
- * 已知局限（TOCTOU）：check() 是“读时放行”的闸门，而调用费用在调用完成
- * 之后才记账落盘；并发场景下多个调用可能在任一记账落地前集体通过检查，
- * 超支量级 ≈ 并发调用数 × 单次调用费用。暂不引入锁/额度预占等复杂方案。
- * 另：用量读取带短 TTL 内存缓存（见 SPENT_CACHE_TTL_MS），缓存窗口内
- * 的新增花费对闸门不可见，属同一量级的已知近似。
+ * 调用期权协议（预授权-结算两阶段提交）：
+ * check() 是“读时放行”，费用在调用完成后才记账——并发调用可能在任一
+ * 记账落地前集体通过检查（TOCTOU）。为此在 invoke 时刻增加 reserve()：
+ * 按估算金额锁定额度（预授权），调用完成后 settle(actual) 入账并释放
+ * 差额，失败则 release() 全额释放。可用额度恒为
+ *   available = budget − spent − Σ在途预留，
+ * 不变式收紧为「最终支出 ≤ 预算 + Σ在途(实际−估算)⁺」——超支上界从
+ * 「并发数 × 单次全额」降为「并发数 × 估算误差」。预留带 TTL 懒回收
+ * （惰性清扫，无空闲定时器）：超时未结算的孤儿预留（调用崩溃路径）在
+ * 下次访问时自动释放；TTL 取 apiTimeoutMs + 缓冲，覆盖在途调用窗口。
+ * settle 同步推进 spent 缓存，使缓存窗口内的新增花费对闸门即时可见
+ * （15s TTL 缓存由此退化为全量扫描的兜底优化，不再是精度近似）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage'
@@ -45,6 +52,25 @@ export interface BudgetSnapshot {
   ratio: number
   /** 是否已暂停非必要调用（任一档用尽）。 */
   paused: boolean
+  /** 在途预留合计（元）：已预授权未结算的调用估算费用。 */
+  reservedCny: number
+}
+
+/** 预授权句柄：settle/release 幂等，交给调用方在 invoke 前后配对使用。 */
+export interface Reservation {
+  /** 预授权金额（元）。 */
+  readonly amountCny: number
+  /** 结算：按实际费用入账并释放预留（差额自动回到可用额度）。 */
+  settle(actualCny: number): void
+  /** 全额释放预留（调用失败/中止路径）。 */
+  release(): void
+}
+
+/** 内部预留记录。 */
+interface ReservationRecord {
+  amountCny: number
+  expiresAt: number
+  settled: boolean
 }
 
 /** 用量缓存 TTL（毫秒）：热路径免全表扫描的短窗口近似。 */
@@ -69,6 +95,10 @@ export class BudgetGuard {
   private dailyCache: SpentCacheEntry | undefined
   /** 月用量短 TTL 缓存：跨月或过期失效。 */
   private monthlyCache: SpentCacheEntry | undefined
+  /** 在途预留（调用期权协议）：id → 记录。 */
+  private readonly reservations = new Map<number, ReservationRecord>()
+  /** 预留自增 id。 */
+  private nextReservationId = 0
 
   /**
    * @param ctx 插件上下文（发事件与通知）。
@@ -131,6 +161,129 @@ export class BudgetGuard {
     return false
   }
 
+  /**
+   * 预授权（调用期权协议）：按估算金额锁定额度，返回结算句柄。
+   *
+   * 投影口径：任一档（日/月）的 projected = spent + Σ在途预留 + 本次估算
+   * 达到该档预算即拒绝非必要调用；essential 调用透支放行（告警）。
+   * 告警按「档位 + 周期键」经既有 alertOnce 去重（fire-and-forget，
+   * 写盘失败不阻塞调用）。预留带 TTL，由惰性清扫回收孤儿记录。
+   * @param estimateCny 估算费用（元）。
+   * @param essential 必要调用：预授权不足时仍放行（透支告警）。
+   * @param ttlMs 预留有效期：应覆盖单次调用窗口（apiTimeoutMs + 缓冲）。
+   * @throws DeepSeekApiError 投影超预算且非必要调用。
+   */
+  reserve(estimateCny: number, essential: boolean, ttlMs: number): Reservation {
+    const now = Date.now()
+    this.sweepExpired(now)
+    const settings = this.getSettings()
+    const reservedTotal = this.reservedTotalCny()
+    // 日档：投影（含在途预留）达 100% 拒绝 / 80% 告警。
+    if (settings.dailyBudgetCny > 0) {
+      const projected = this.spentToday(now) + reservedTotal + estimateCny
+      if (projected >= settings.dailyBudgetCny) {
+        this.fireAlert('daily', beijingDayKey(now), 100, projected, settings.dailyBudgetCny)
+        if (!essential) {
+          throw new DeepSeekApiError(
+            '今日预算预授权不足（含在途调用），非必要调用已拒绝',
+            'INSUFFICIENT_BALANCE',
+          )
+        }
+      } else if (projected >= settings.dailyBudgetCny * 0.8) {
+        this.fireAlert('daily', beijingDayKey(now), 80, projected, settings.dailyBudgetCny)
+      }
+    }
+    // 月档。
+    if (settings.monthlyBudgetCny > 0) {
+      const projected = this.spentThisMonth(now) + reservedTotal + estimateCny
+      if (projected >= settings.monthlyBudgetCny) {
+        this.fireAlert('monthly', beijingMonthKey(now), 100, projected, settings.monthlyBudgetCny)
+        if (!essential) {
+          throw new DeepSeekApiError(
+            '月度预算预授权不足（含在途调用），非必要调用已拒绝',
+            'INSUFFICIENT_BALANCE',
+          )
+        }
+      } else if (projected >= settings.monthlyBudgetCny * 0.8) {
+        this.fireAlert('monthly', beijingMonthKey(now), 80, projected, settings.monthlyBudgetCny)
+      }
+    }
+    const id = (this.nextReservationId += 1)
+    const record: ReservationRecord = {
+      amountCny: estimateCny,
+      expiresAt: now + ttlMs,
+      settled: false,
+    }
+    this.reservations.set(id, record)
+    return {
+      amountCny: estimateCny,
+      settle: (actualCny: number): void => {
+        if (record.settled) return
+        record.settled = true
+        this.reservations.delete(id)
+        this.applySettlement(actualCny)
+      },
+      release: (): void => {
+        if (record.settled) return
+        record.settled = true
+        this.reservations.delete(id)
+      },
+    }
+  }
+
+  /** 在途预留合计（元）。 */
+  reservedTotalCny(): number {
+    this.sweepExpired(Date.now())
+    let total = 0
+    for (const record of this.reservations.values()) total += record.amountCny
+    return round4(total)
+  }
+
+  /**
+   * 结算推进 spent 缓存：结算的实际费用已由核心服务记账落盘（usage.record），
+   * 此处同步累加缓存值使闸门即时可见。并发下若他方恰好全量刷新了缓存，
+   * 存在短暂保守方向的重复计入（自愈于缓存 TTL 内，闸门偏严不偏松）。
+   */
+  private applySettlement(actualCny: number): void {
+    if (!Number.isFinite(actualCny) || actualCny <= 0) return
+    const now = Date.now()
+    const dayKey = beijingDayKey(now)
+    const monthKey = beijingMonthKey(now)
+    if (this.dailyCache && this.dailyCache.periodKey === dayKey) {
+      this.dailyCache = {
+        ...this.dailyCache,
+        spentCny: round4(this.dailyCache.spentCny + actualCny),
+        atMs: now,
+      }
+    }
+    if (this.monthlyCache && this.monthlyCache.periodKey === monthKey) {
+      this.monthlyCache = {
+        ...this.monthlyCache,
+        spentCny: round4(this.monthlyCache.spentCny + actualCny),
+        atMs: now,
+      }
+    }
+  }
+
+  /** 惰性清扫：释放超时未结算的孤儿预留（调用崩溃路径），无空闲定时器。 */
+  private sweepExpired(now: number): void {
+    if (this.reservations.size === 0) return
+    for (const [id, record] of this.reservations) {
+      if (record.expiresAt <= now) this.reservations.delete(id)
+    }
+  }
+
+  /** fire-and-forget 告警：写盘与通知失败均不阻塞预授权路径。 */
+  private fireAlert(
+    tier: BudgetTier,
+    period: string,
+    level: 80 | 100,
+    projectedCny: number,
+    budgetCny: number,
+  ): void {
+    void this.alertOnce(tier, period, level, projectedCny, budgetCny, true).catch(() => undefined)
+  }
+
   /** 预算状态快照（日/月各读一次用量，TTL 缓存内复用）。 */
   state(): BudgetSnapshot {
     const settings = this.getSettings()
@@ -147,6 +300,7 @@ export class BudgetGuard {
       spentCny,
       ratio: settings.monthlyBudgetCny > 0 ? round4(spentCny / settings.monthlyBudgetCny) : 0,
       paused: dailyPaused || monthlyPaused,
+      reservedCny: this.reservedTotalCny(),
     }
   }
 
@@ -185,6 +339,7 @@ export class BudgetGuard {
    * 每周期（日/月）每级只告警一次：持久化状态 + 进程内去重，随后发事件与通知。
    * 先写盘、成功后才标记进程内去重：写盘失败不标记也不阻塞调用，
    * 告警照常发出（宁可后续重复告警，不可永久吞掉）。
+   * @param includesReserved 金额口径是否含在途预授权（预授权路径的投影口径）。
    */
   private async alertOnce(
     tier: BudgetTier,
@@ -192,6 +347,7 @@ export class BudgetGuard {
     level: 80 | 100,
     spentCny: number,
     budgetCny: number,
+    includesReserved = false,
   ): Promise<void> {
     // 存储键带档位前缀：日键（YYYY-MM-DD）与月键（YYYY-MM）天然不冲突，
     // 前缀仅为可读性与防御。
@@ -218,6 +374,7 @@ export class BudgetGuard {
       )
     }
     const periodLabel = tier === 'daily' ? '今日' : '本月'
+    const reservedNote = includesReserved ? '（含在途调用预授权）' : ''
     this.ctx.emit('companion/budget-alert', {
       level,
       tier,
@@ -229,8 +386,8 @@ export class BudgetGuard {
     this.ctx.companion.notice(
       level === 100 ? 'error' : 'warning',
       level === 100
-        ? `${periodLabel} API 用量已达预算上限（¥${spentCny.toFixed(4)} / ¥${budgetCny.toFixed(2)}），非必要调用已暂停`
-        : `${periodLabel} API 用量已达预算的 80%（¥${spentCny.toFixed(4)} / ¥${budgetCny.toFixed(2)}），请注意控制`,
+        ? `${periodLabel} API 用量已达预算上限${reservedNote}（¥${spentCny.toFixed(4)} / ¥${budgetCny.toFixed(2)}），非必要调用已暂停`
+        : `${periodLabel} API 用量已达预算的 80%${reservedNote}（¥${spentCny.toFixed(4)} / ¥${budgetCny.toFixed(2)}），请注意控制`,
     )
   }
 }

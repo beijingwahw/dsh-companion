@@ -110,14 +110,15 @@ export function apply(ctx: Context): void {
 - `POST /handoff/templates` `{ name, content }` → `{ ok: true }`
 - `DELETE /handoff/templates` `{ name }` → `{ ok: true }`
 - `POST /handoff/import` `{ summary, sessionId? }` → `{ ok: true, sessionId: string | null }`
-  （无 sessionId = 武装给"下一个新对话"）
-- `GET  /handoff/armed` → `{ armed: [{ sessionId: string | null, summary, armedAt }] }`
+  （无 sessionId = 武装给"下一个新对话"；pending 武装携带世代快照与 24h 有效期，见第 8 节）
+- `GET  /handoff/armed` → `{ armed: [{ sessionId: string | null, summary, armedAt }], receipts: [{ sessionId, injectedAt }] }`
+  `receipts` 为 pending 摘要的投递回执（按注入时间降序，滚动保留最近 20 条）。
 - `DELETE /handoff/armed` `{ sessionId? }` → `{ ok: true }`
 
 ### 模块 C（cost）
-- `GET    /cost/state` → `{ devMode, apiKeyConfigured, peakScheduling, modelRouting, budget: { dailyCny, dailySpentCny, dailyRatio, monthlyCny, spentCny, ratio, paused }, rules, pricing }`
+- `GET    /cost/state` → `{ devMode, apiKeyConfigured, peakScheduling, modelRouting, budget: { dailyCny, dailySpentCny, dailyRatio, monthlyCny, spentCny, ratio, paused, reservedCny }, rules, pricing }`
   `budget` 为日/月双档：`dailyCny`/`monthlyCny` 为 0 表示该档不限；`paused` 为任一档用尽。
-  已花费有短 TTL 内存缓存（跨日/跨月失效）。
+  `reservedCny` 为在途预授权合计（调用期权协议，见第 8 节）。
 - `POST   /cost/api-key` `{ apiKey }` → `{ ok: true }`；`DELETE /cost/api-key` → `{ ok: true }`
 - `POST   /cost/settings`（稀疏补丁：devMode?/peakScheduling?/modelRouting?/dailyBudgetCny?/monthlyBudgetCny?/rules?/pricing?）→ `{ ok: true }`
   `rules` 校验：数量 ≤ `MAX_CUSTOM_RULES`（20）、pattern ≤ `MAX_RULE_PATTERN_LENGTH`（200）字符、
@@ -170,9 +171,12 @@ export function apply(ctx: Context): void {
   `kind: 'print'` 响应 = 新窗口写入 html 并触发打印（仅降级路径）；
   `kind: 'raster'` 响应 = 交 `raster.ts` 客户端光栅化（`target: 'png'` → PNG 长图，
   `target: 'pdf'` → 免打印多页 PDF），全程无 window.print() 对话框。
-- `raster.ts`（移植自 dsh-conv-export）：打印 HTML → 离屏舞台（剥离 script）→ SVG foreignObject →
-  2x canvas；图片先内联为 data: URL；PDF 按 A4 页高切片、JPEG 编码、零依赖组装。
-  高度上限 16000px（canvas 限制）。仅依赖浏览器内置能力，可单测。
+- `raster.ts`（移植自 dsh-conv-export，流式重构）：打印 HTML → 离屏舞台（剥离 script，存活期内
+  为克隆源）→ 分片光栅（foreignObject 窗口 translateY 位移，片高 = A4 页高 × 2）→ 2x canvas；
+  图片先内联为 data: URL。PNG 走流式编码器（片级自适应行过滤 + CompressionStream('deflate')
+  增量压缩 + Blob 直下）；PDF 按页切片、JPEG 编码、零依赖组装，页界与片界对齐。
+  导出带分片进度回调与取消信号；无 CompressionStream 环境退回单 canvas 截断路径（16000px）。
+  仅依赖浏览器内置能力，可单测。
 - `convsearch/`（移植自 dsh-conv-search）：纯 DOM 浮动查找栏，不与宿主 React 版本耦合；
   控制器随 `ctx.effect` install/uninstall（卸载清除全部高亮与按键捕获）；
   高亮经 CSS Custom Highlight API 覆盖层绘制（不触碰 React 转录 DOM）；
@@ -202,8 +206,16 @@ export function apply(ctx: Context): void {
   （`INSUFFICIENT_BALANCE`）；必要调用放行但持续告警。80% 告警不拦截，100% 告警并暂停。
   告警按「档位 + 周期键」进程内去重（`companion/budget-alert` 事件携带 `tier`/`period`），
   跨日/跨月自动重新告警；已花费短 TTL 内存缓存，跨日/跨月失效。
+- **调用期权协议（预授权-结算两阶段提交）**：网关 invoke 时按估算金额 reserve 锁定额度，
+  调用成功 settle(actual) 入账并释放差额、失败 release 全额释放。可用额度恒为
+  `budget − spent − Σ在途预留`，不变式收紧为「最终支出 ≤ 预算 + Σ在途(实际−估算)⁺」。
+  估算经 P95 估值器（模型 × 输入长度分桶滚动样本，冷启动用上界）；预留 TTL = apiTimeoutMs +
+  30s，惰性清扫回收孤儿预留（无空闲定时器）；settle 同步推进 spent 缓存，15s TTL 缓存由此
+  退化为全量扫描兜底。预授权投影口径（spent + 在途 + 估算）触发告警时文案标注「含在途调用预授权」。
+  旧 TOCTOU 局限（并发集体过闸，超支 ≈ 并发数 × 单次全额）收敛为估算误差量级。
 - **预算闸门覆盖延迟队列**：drain 执行每个排队任务前复检预算；暂停期间排队任务以
-  `INSUFFICIENT_BALANCE` 被逐个 reject，延迟队列不是闸门旁路。
+  `INSUFFICIENT_BALANCE` 被逐个 reject，延迟队列不是闸门旁路。预授权在任务真正执行
+  （invoke）时锁定：排队期间不占额度，执行时的额度竞争由预留协议收敛。
 - **调度器**：定时器按需一次性精确唤醒（队列空时无定时器）；队列容量上限 100，
   满时拒绝入队；执行前检查调用方 `signal`，已中止直接 reject 不发真实请求。
   高峰窗口优先取计价引擎对官方定价页的实时解析（`peakWindows`），空表/异常回退内置缺省窗口，
@@ -212,8 +224,17 @@ export function apply(ctx: Context): void {
   `deferredCalls` 仅当调度器真实延迟时计入（网关不预判）。
 - **告警与记账健壮性**：告警写盘失败不阻塞调用、不永久吞告警；API 调用成功后的记账失败降级为
   warning notice，不反转成功结果。
-- **已知局限（TOCTOU）**：预算检查在调用前、记账在调用后，并发调用可能在临界点集体通过闸门，
-  超支量级 ≈ 并发调用数 × 单次调用费用；已花费短 TTL 缓存属同一量级的已知近似。
+
+交接模块（模块 B）行为契约：
+
+- **世代门闩（generation latch）**：pending 武装（武装给"下一个新对话"）在 arm 时刻快照
+  全部已知会话 ID（`knownSessions`）并携带 24h 有效期（`expiresAt`）。系统提示词装配回调
+  只向「快照之外」且带具体会话作用域的装配投递摘要——旧会话无论怎么重建都在快照内，
+  天然免疫误投递；无作用域的全局装配不消费摘要。超时未投递自动作废（防僵尸注入）。
+  投递成功写入回执（`handoff-receipts` 表，按会话覆盖、滚动保留 20 条），
+  `GET /handoff/armed` 附带回执供 dock 展示「已注入会话 X」。
+  旧格式记录（无快照字段）回退 v0.1 近似：注入下一次系统提示词装配；
+  快照失败（会话引擎异常）同样退化为无快照武装，不阻塞武装操作。
 
 导出模块（模块 A）行为契约：
 
@@ -221,8 +242,15 @@ export function apply(ctx: Context): void {
   服务端只产出打印 HTML；命令面板等无 canvas 环境：PNG → 400 可读文案，PDF → kind:'print' 降级。
 - **批量纪律**：批量打包在服务端完成，强制 raster=false；PNG 不支持批量（400）；
   非 Latin-1 PDF 以 `.html` 入包，不阻塞其余会话。
+- **分片光栅（tiled rasterization）**：整篇对话按片高（A4 页高 × 2）逐片光栅化，
+  片内经 foreignObject 窗口（translateY 位移）渲染到独立 2x canvas；页界与片界对齐
+  （页永不跨片），PDF 页数无上限，峰值内存恒为单片量级。导出带分片进度回调与取消信号。
+- **流式 PNG 编码**：逐片取像素 → 逐行 PNG 过滤（片级自适应选过滤器，
+  跨片行连续性经原始行携带）→ `CompressionStream('deflate')`（zlib，恰为 PNG 规范格式）
+  增量压缩 → Blob 直下；PNG 规范无高度上限，产品理智上限 200,000 CSS px（≈176 页 A4）。
+  无 CompressionStream 的环境退回旧单 canvas 截断路径（16000px）。
 - **光栅引擎限制**：foreignObject 内脚本不执行（服务端打印页的自动打印 script 已在离屏舞台剥离）；
-  外部图片先内联为 data: URL，不可达图片直接移除；光栅高度上限 16000px。
+  外部图片先内联为 data: URL，不可达图片直接移除。
 
 核心服务行为契约：
 

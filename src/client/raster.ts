@@ -1,23 +1,40 @@
 /**
- * 客户端光栅导出引擎（能力吸收自 dsh-conv-export）：
- * - PNG 长图：将服务端打印 HTML 离屏渲染 → SVG foreignObject 光栅化 → 2x canvas → PNG 下载；
- * - 免打印 PDF：一次光栅化 → 按 A4 页高切片 → JPEG 编码 → 组装最小多页 PDF 下载。
+ * 客户端光栅导出引擎（能力吸收自 dsh-conv-export，流式重构）：
+ * - 分片光栅（tiled rasterization）：整篇对话按片高（A4 页高整数倍）逐片
+ *   光栅化，片内经 SVG foreignObject 窗口（translateY 位移）渲染到独立
+ *   2x canvas——单 canvas 高度不再是上限，PDF 页数无上限、页界与片界
+ *   对齐（页永不跨片），峰值内存恒为「单片」量级；
+ * - PNG 长图：流式 PNG 编码器（StreamingPngEncoder）逐片取像素 → 逐行
+ *   PNG 过滤（自适应选片级过滤器，跨片行连续性经原始行携带）→
+ *   CompressionStream('deflate')（恰为 PNG 规范要求的 zlib 流）增量压缩
+ *   → Blob 直下。PNG 规范本身无高度上限，突破旧 16000px 截断；
+ * - 免打印 PDF：分片光栅 → 按页切片 → JPEG → 组装最小多页 PDF 下载。
  *
  * 取代旧的 window.print() 回退路径：打印对话框在部分平台（尤其 Windows Chrome）
  * 是窗口模态对话框，会冻结整个浏览器（包括应用标签页）直至关闭；
  * 光栅路径零对话框、零冻结，成品像普通文件一样直接下载。
  *
- * 仅依赖浏览器内置能力（DOM/canvas），不依赖 cordis 与 React，可单测。
+ * 仅依赖浏览器内置能力（DOM/canvas/CompressionStream），不依赖 cordis 与
+ * React，可单测。无 CompressionStream 的环境退回旧的单 canvas 截断路径。
  */
 
 /** 光栅宽度（CSS px；2x 视网膜下实际像素翻倍）。 */
 const IMAGE_WIDTH = 800
 /** 光栅缩放系数（2x 视网膜）。 */
 const IMAGE_SCALE = 2
-/** 光栅高度上限（canvas 尺寸限制）。 */
-const IMAGE_MAX_HEIGHT = 16000
 /** PDF 单页高度（IMAGE_WIDTH 宽下的 CSS px，A4 纵横比）。 */
 const PAGE_CSS_HEIGHT = Math.round((IMAGE_WIDTH * 297) / 210)
+/** 单个光栅分片承载的 A4 页数：片高 = 页高 × 此值（页界与片界对齐）。 */
+const PAGES_PER_TILE = 2
+/** 分片高度（CSS px）。 */
+const TILE_CSS_HEIGHT = PAGE_CSS_HEIGHT * PAGES_PER_TILE
+/**
+ * 整篇对话光栅总高上限（CSS px，≈176 页 A4）：产品理智上限，
+ * 防御极端内存/时长；PNG/PDF 路径共用。
+ */
+const MAX_TOTAL_CSS_HEIGHT = 200_000
+/** 旧路径单 canvas 高度上限（无 CompressionStream 环境的降级截断）。 */
+const LEGACY_MAX_HEIGHT = 16000
 
 /** 单页 PDF 的图像载荷。 */
 interface PdfPage {
@@ -27,6 +44,15 @@ interface PdfPage {
   readonly widthPx: number
   /** 逻辑高度（CSS px）。 */
   readonly heightPx: number
+}
+
+/** 导出进度回调：done 已完成片/页数，total 总数。 */
+export type RasterProgress = (done: number, total: number) => void
+
+/** 导出选项：进度回调与取消信号。 */
+export interface RasterExportOptions {
+  onProgress?: RasterProgress
+  signal?: AbortSignal
 }
 
 /**
@@ -77,36 +103,61 @@ async function inlineImages(root: HTMLElement): Promise<void> {
 }
 
 /**
- * 将打印文档离屏渲染并光栅化到 2x canvas。
- * @param html 服务端打印 HTML（完整文档）。
- * @returns 光栅化画布（宽 IMAGE_WIDTH * IMAGE_SCALE）。
- * @throws 运行环境无法光栅化时抛出（无 canvas / SVG 解析失败）。
+ * 光栅舞台：服务端打印 HTML 的离屏渲染宿主，支持按窗口分片光栅化。
+ * 舞台在存活期内保持挂载（克隆源），dispose 时移除。
  */
-async function rasterize(html: string): Promise<HTMLCanvasElement> {
-  const { styles, bodyInner, bodyStyle } = toStageContent(html)
-  const stage = document.createElement('div')
-  stage.style.cssText =
-    `position:fixed;left:-100000px;top:0;width:${IMAGE_WIDTH}px;pointer-events:none;z-index:-1;`
-  const style = document.createElement('style')
-  style.textContent = styles
-  stage.appendChild(style)
-  const content = document.createElement('div')
-  content.innerHTML = bodyInner
-  stage.appendChild(content)
-  document.body.appendChild(stage)
-  try {
-    await inlineImages(stage)
-    // 等待内联图片完成布局沉淀。
-    await new Promise((resolve) => setTimeout(resolve, 60))
-    const height = Math.min(Math.ceil(stage.scrollHeight), IMAGE_MAX_HEIGHT)
+class RasterStage {
+  private constructor(
+    private readonly stage: HTMLElement,
+    private readonly bodyStyle: string,
+    /** 整篇内容高度（CSS px，已封顶 MAX_TOTAL_CSS_HEIGHT）。 */
+    readonly totalHeight: number,
+  ) {}
 
+  /** 构建舞台：解析 HTML → 离屏挂载 → 内联图片 → 布局沉淀 → 测高。 */
+  static async create(html: string): Promise<RasterStage> {
+    const { styles, bodyInner, bodyStyle } = toStageContent(html)
+    const stage = document.createElement('div')
+    stage.style.cssText =
+      `position:fixed;left:-100000px;top:0;width:${IMAGE_WIDTH}px;pointer-events:none;z-index:-1;`
+    const style = document.createElement('style')
+    style.textContent = styles
+    stage.appendChild(style)
+    const content = document.createElement('div')
+    content.innerHTML = bodyInner
+    stage.appendChild(content)
+    document.body.appendChild(stage)
+    try {
+      await inlineImages(stage)
+      // 等待内联图片完成布局沉淀。
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      const totalHeight = Math.max(1, Math.min(Math.ceil(stage.scrollHeight), MAX_TOTAL_CSS_HEIGHT))
+      return new RasterStage(stage, bodyStyle, totalHeight)
+    } catch (error) {
+      stage.remove()
+      throw error
+    }
+  }
+
+  /** 移除离屏舞台（幂等）。 */
+  dispose(): void {
+    this.stage.remove()
+  }
+
+  /**
+   * 光栅化 [offset, offset + height) 窗口到 2x canvas。
+   * 窗口经克隆根的 translateY(−offset) 位移实现：foreignObject 视口裁剪
+   * 视口外内容，浏览器只为窗口内像素付出光栅成本。
+   * @throws 运行环境无法光栅化时抛出（无 canvas / SVG 解析失败）。
+   */
+  async tile(offset: number, height: number): Promise<HTMLCanvasElement> {
     // 序列化干净克隆：不带离屏偏移（否则内容会移出 SVG 视口），
     // 显式 XHTML 命名空间保证 foreignObject 载荷格式合法；
     // 原 body 样式声明直接落到克隆根节点（foreignObject 内无 body 元素）。
-    const clone = stage.cloneNode(true) as HTMLElement
+    const clone = this.stage.cloneNode(true) as HTMLElement
     clone.setAttribute(
       'style',
-      `${bodyStyle};width:${IMAGE_WIDTH}px;background:#ffffff;`,
+      `${this.bodyStyle};width:${IMAGE_WIDTH}px;background:#ffffff;transform:translateY(-${offset}px);`,
     )
     clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml')
     const serialized = new XMLSerializer().serializeToString(clone)
@@ -125,17 +176,280 @@ async function rasterize(html: string): Promise<HTMLCanvasElement> {
     const canvas = document.createElement('canvas')
     canvas.width = IMAGE_WIDTH * IMAGE_SCALE
     canvas.height = height * IMAGE_SCALE
-    const ctx = canvas.getContext('2d')
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
     if (ctx === null) throw new Error('no 2d context')
     ctx.scale(IMAGE_SCALE, IMAGE_SCALE)
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, IMAGE_WIDTH, height)
     ctx.drawImage(img, 0, 0, IMAGE_WIDTH, height)
     return canvas
-  } finally {
-    stage.remove()
   }
 }
+
+// ---------------------------------------------------------------------------
+// 流式 PNG 编码器（零依赖，仅浏览器内置能力）
+// ---------------------------------------------------------------------------
+
+/** PNG 签名（8 字节）。 */
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/**
+ * CRC-32 查表（镜像 core/zip.ts 的实现；客户端模块自包含，不跨端引入）。
+ */
+const PNG_CRC_TABLE: Uint32Array = (() => {
+  const table = new Uint32Array(256)
+  for (let n = 0; n < 256; n += 1) {
+    let c = n
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    }
+    table[n] = c >>> 0
+  }
+  return table
+})()
+
+/** CRC-32（多段输入，多项式 0xedb88320，与 PNG/ZIP 一致）。 */
+function crc32Parts(parts: readonly Uint8Array[]): number {
+  let crc = 0xffffffff
+  for (const part of parts) {
+    for (let i = 0; i < part.byteLength; i += 1) {
+      crc = PNG_CRC_TABLE[(crc ^ part[i]!) & 0xff]! ^ (crc >>> 8)
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+/** ASCII 字节（PNG chunk 类型固定 4 字节 ASCII）。 */
+function asciiBytes(text: string): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(text.length)
+  for (let i = 0; i < text.length; i += 1) out[i] = text.charCodeAt(i) & 0x7f
+  return out
+}
+
+/** 组装一个 PNG chunk：length(BE) + type + data + crc32(type ∥ data)(BE)。 */
+function pngChunk(type: string, data: Uint8Array): Uint8Array<ArrayBuffer> {
+  const typeBytes = asciiBytes(type)
+  const out = new Uint8Array(12 + data.byteLength)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, data.byteLength)
+  out.set(typeBytes, 4)
+  out.set(data, 8)
+  view.setUint32(8 + data.byteLength, crc32Parts([typeBytes, data]))
+  return out
+}
+
+/** IHDR 载荷：宽/高(BE) + 位深 8 + 颜色类型 6(RGBA) + 压缩/过滤/隔行 0。 */
+function ihdrBytes(width: number, height: number): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(13)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, width)
+  view.setUint32(4, height)
+  out[8] = 8
+  out[9] = 6
+  out[10] = 0
+  out[11] = 0
+  out[12] = 0
+  return out
+}
+
+/** Paeth 预测子（PNG 过滤器 4）。 */
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c
+  const pa = Math.abs(p - a)
+  const pb = Math.abs(p - b)
+  const pc = Math.abs(p - c)
+  if (pa <= pb && pa <= pc) return a
+  if (pb <= pc) return b
+  return c
+}
+
+/** PNG 行过滤器候选（0=None 1=Sub 2=Up 4=Paeth；3=Average 极少胜出，略）。 */
+type PngFilter = 0 | 1 | 2 | 4
+const PNG_FILTERS: readonly PngFilter[] = [0, 1, 2, 4]
+
+/** 上一原始行的引用（跨分片连续：过滤器 2/4 需要真实的上一行字节）。 */
+type PrevRow = Uint8ClampedArray | Uint8Array | undefined
+
+/**
+ * 对一行原始像素应用过滤器，写入 out[outAt..)（不含行首 filter 字节）。
+ * @param prevData 上一原始行所在数组（undefined = 全零，即整图首行）。
+ * @param prevStart 上一行在 prevData 中的起始下标。
+ */
+function applyFilter(
+  filter: PngFilter,
+  raw: Uint8ClampedArray,
+  rowStart: number,
+  bytesPerRow: number,
+  prevData: PrevRow,
+  prevStart: number,
+  out: Uint8Array,
+  outAt: number,
+): void {
+  for (let i = 0; i < bytesPerRow; i += 1) {
+    const x = raw[rowStart + i]
+    if (filter === 0) {
+      out[outAt + i] = x
+      continue
+    }
+    const left = i >= 4 ? raw[rowStart + i - 4] : 0
+    const up = prevData !== undefined ? prevData[prevStart + i] : 0
+    let predictor: number
+    if (filter === 1) predictor = left
+    else if (filter === 2) predictor = up
+    else predictor = paethPredictor(left, up, prevData !== undefined && i >= 4 ? prevData[prevStart + i - 4] : 0)
+    out[outAt + i] = x - predictor
+  }
+}
+
+/** 过滤器的编码代价启发式：过滤后字节的符号幅值总和，越小越优。 */
+function filterCost(
+  filter: PngFilter,
+  raw: Uint8ClampedArray,
+  rowStart: number,
+  bytesPerRow: number,
+  prevData: PrevRow,
+  prevStart: number,
+): number {
+  let cost = 0
+  for (let i = 0; i < bytesPerRow; i += 1) {
+    const x = raw[rowStart + i]
+    if (filter === 0) {
+      cost += x < 128 ? x : 256 - x
+      continue
+    }
+    const left = i >= 4 ? raw[rowStart + i - 4] : 0
+    const up = prevData !== undefined ? prevData[prevStart + i] : 0
+    let predictor: number
+    if (filter === 1) predictor = left
+    else if (filter === 2) predictor = up
+    else predictor = paethPredictor(left, up, prevData !== undefined && i >= 4 ? prevData[prevStart + i - 4] : 0)
+    const v = (x - predictor) & 0xff
+    cost += v < 128 ? v : 256 - v
+  }
+  return cost
+}
+
+/**
+ * 片级自适应过滤器选择：均匀采样若干行，对候选过滤器累计代价取最小。
+ * 逐行全量自适应在超长图（数十万行）下代价过高，片级选择把选择开销
+ * 压到可忽略，同时保留主要的压缩收益。
+ */
+function pickTileFilter(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  carriedPrev: PrevRow,
+): PngFilter {
+  const bytesPerRow = width * 4
+  const step = Math.max(1, Math.floor(height / 16))
+  const costs = [0, 0, 0, 0]
+  for (let y = 0; y < height; y += step) {
+    const rowStart = y * bytesPerRow
+    for (let c = 0; c < PNG_FILTERS.length; c += 1) {
+      const filter = PNG_FILTERS[c]!
+      if (y === 0) {
+        costs[c] += filterCost(filter, data, rowStart, bytesPerRow, carriedPrev, 0)
+      } else {
+        costs[c] += filterCost(filter, data, rowStart, bytesPerRow, data, rowStart - bytesPerRow)
+      }
+    }
+  }
+  let best = 0
+  for (let c = 1; c < costs.length; c += 1) {
+    if (costs[c]! < costs[best]!) best = c
+  }
+  return PNG_FILTERS[best]!
+}
+
+/** CompressionStream 的结构化视图（规避各端 DOM 类型声明差异）。 */
+interface DeflateStreamParts {
+  readonly writable: WritableStream<Uint8Array | ArrayBuffer>
+  readonly readable: ReadableStream<Uint8Array | ArrayBuffer>
+}
+
+/**
+ * 流式 PNG 编码器：逐片消费 canvas 像素，增量产出 zlib 压缩的 IDAT 数据，
+ * finish 时组装完整 PNG Blob。峰值内存 ≈ 单片原始像素 + 压缩输出。
+ */
+class StreamingPngEncoder {
+  private readonly writer: WritableStreamDefaultWriter<Uint8Array | ArrayBuffer>
+  private readonly outputChunks: Uint8Array[] = []
+  private readonly pump: Promise<void>
+  private pumpError: unknown
+  private carriedPrev: PrevRow
+  private finished = false
+
+  constructor(
+    private readonly widthPx: number,
+    private readonly heightPx: number,
+  ) {
+    // 'deflate' 恰产出 zlib(RFC1950) 流——正是 PNG IDAT 的规范格式。
+    const streams = new CompressionStream('deflate') as unknown as DeflateStreamParts
+    this.writer = streams.writable.getWriter()
+    const reader = streams.readable.getReader()
+    // 并行泵：边写入边收集压缩输出（TransformStream 背压自动节流写入侧）。
+    this.pump = (async () => {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value !== undefined) {
+          this.outputChunks.push(value instanceof Uint8Array ? value : new Uint8Array(value))
+        }
+      }
+    })().catch((error: unknown) => {
+      this.pumpError = error
+    })
+  }
+
+  /** 消费一片 canvas：逐行过滤（片级自适应过滤器）→ 单次 write 增量压缩。 */
+  async pushTile(tile: HTMLCanvasElement): Promise<void> {
+    if (this.finished) throw new Error('png encoder already finished')
+    const ctx = tile.getContext('2d', { willReadFrequently: true })
+    if (ctx === null) throw new Error('no 2d context')
+    const { data, width, height } = ctx.getImageData(0, 0, tile.width, tile.height)
+    const bytesPerRow = width * 4
+    const filter = pickTileFilter(data, width, height, this.carriedPrev)
+    const out = new Uint8Array((bytesPerRow + 1) * height)
+    let at = 0
+    for (let y = 0; y < height; y += 1) {
+      out[at] = filter
+      at += 1
+      const rowStart = y * bytesPerRow
+      if (y === 0) {
+        applyFilter(filter, data, rowStart, bytesPerRow, this.carriedPrev, 0, out, at)
+      } else {
+        applyFilter(filter, data, rowStart, bytesPerRow, data, rowStart - bytesPerRow, out, at)
+      }
+      at += bytesPerRow
+    }
+    // 携带本片最后一行原始字节：下一片首行的 Up/Paeth 过滤需要真实上一行。
+    this.carriedPrev = data.slice((height - 1) * bytesPerRow, height * bytesPerRow)
+    await this.writer.write(out)
+  }
+
+  /** 关闭压缩流并组装完整 PNG Blob。 */
+  async finish(): Promise<Blob> {
+    if (this.finished) throw new Error('png encoder already finished')
+    this.finished = true
+    let closeError: unknown
+    try {
+      await this.writer.close()
+    } catch (error) {
+      closeError = error
+    }
+    await this.pump
+    if (this.pumpError !== undefined) throw this.pumpError
+    if (closeError !== undefined) throw closeError
+    const parts: BlobPart[] = [PNG_SIGNATURE, pngChunk('IHDR', ihdrBytes(this.widthPx, this.heightPx))]
+    for (const chunk of this.outputChunks) parts.push(pngChunk('IDAT', chunk))
+    parts.push(pngChunk('IEND', new Uint8Array(0)))
+    return new Blob(parts, { type: 'image/png' })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PDF 组装与下载
+// ---------------------------------------------------------------------------
 
 /**
  * 组装最小多页 PDF：每页一张 JPEG（能力吸收自 dsh-conv-export 的 buildPdf）。
@@ -224,47 +538,126 @@ function download(filename: string, mime: string, data: BlobPart): void {
   setTimeout(() => URL.revokeObjectURL(url), 4000)
 }
 
-/**
- * 导出为 PNG 长图：光栅化整篇对话并下载一张纵向长图。
- * @param html 服务端打印 HTML（完整文档）。
- * @param fileName 下载文件名（含扩展名）。
- * @throws 运行环境无法光栅化时抛出（无 canvas / SVG 解析失败）。
- */
-export async function exportLongPng(html: string, fileName: string): Promise<void> {
-  const canvas = await rasterize(html)
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-  if (blob === null) throw new Error('toBlob failed')
-  download(fileName, 'image/png', blob)
+/** 取消信号已触发时抛出 AbortError（分片循环的检查点）。 */
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException('导出已取消', 'AbortError')
+  }
 }
 
 /**
- * 导出为免打印多页 PDF：光栅化对话 → 按页高切片 → JPEG → 自包含 PDF 下载。
+ * 逐片迭代舞台窗口：按 TILE_CSS_HEIGHT 分片，产出每片的 (offset, height)。
+ */
+async function* iterTiles(
+  stage: RasterStage,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<{ offset: number; height: number; index: number; total: number }> {
+  const total = Math.ceil(stage.totalHeight / TILE_CSS_HEIGHT)
+  for (let index = 0; index < total; index += 1) {
+    throwIfAborted(signal)
+    const offset = index * TILE_CSS_HEIGHT
+    yield { offset, height: Math.min(TILE_CSS_HEIGHT, stage.totalHeight - offset), index, total }
+  }
+}
+
+/**
+ * 导出为 PNG 长图：分片光栅 + 流式 PNG 编码 → 单张纵向长图下载。
+ * PNG 规范无高度上限，超长对话不再被截断（产品上限见 MAX_TOTAL_CSS_HEIGHT）。
+ * 无 CompressionStream 的环境退回旧的单 canvas 截断路径。
+ * @param html 服务端打印 HTML（完整文档）。
+ * @param fileName 下载文件名（含扩展名）。
+ * @throws 运行环境无法光栅化/编码时抛出；取消信号触发 AbortError。
+ */
+export async function exportLongPng(
+  html: string,
+  fileName: string,
+  options?: RasterExportOptions,
+): Promise<void> {
+  if (typeof CompressionStream === 'undefined') {
+    await exportLongPngLegacy(html, fileName, options)
+    return
+  }
+  const stage = await RasterStage.create(html)
+  try {
+    const encoder = new StreamingPngEncoder(IMAGE_WIDTH * IMAGE_SCALE, stage.totalHeight * IMAGE_SCALE)
+    for await (const piece of iterTiles(stage, options?.signal)) {
+      const tile = await stage.tile(piece.offset, piece.height)
+      await encoder.pushTile(tile)
+      options?.onProgress?.(piece.index + 1, piece.total)
+    }
+    download(fileName, 'image/png', await encoder.finish())
+  } finally {
+    stage.dispose()
+  }
+}
+
+/** 旧路径降级：单 canvas 光栅化（截断至 LEGACY_MAX_HEIGHT）+ toBlob。 */
+async function exportLongPngLegacy(
+  html: string,
+  fileName: string,
+  options?: RasterExportOptions,
+): Promise<void> {
+  const stage = await RasterStage.create(html)
+  try {
+    throwIfAborted(options?.signal)
+    const height = Math.min(stage.totalHeight, LEGACY_MAX_HEIGHT)
+    const canvas = await stage.tile(0, height)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (blob === null) throw new Error('toBlob failed')
+    download(fileName, 'image/png', blob)
+  } finally {
+    stage.dispose()
+  }
+}
+
+/**
+ * 导出为免打印多页 PDF：分片光栅 → 按页切片 → JPEG → 自包含 PDF 下载。
+ * 片高为页高整数倍，页界与片界对齐（页永不跨片）；页数无上限。
  * 全程无打印对话框，应用标签页永不冻结。
  * @param html 服务端打印 HTML（完整文档）。
  * @param fileName 下载文件名（含扩展名）。
- * @throws 运行环境无法光栅化时抛出。
+ * @throws 运行环境无法光栅化时抛出；取消信号触发 AbortError。
  */
-export async function exportRasterPdf(html: string, fileName: string): Promise<void> {
-  const canvas = await rasterize(html)
-  const slicePx = PAGE_CSS_HEIGHT * IMAGE_SCALE
-  const pages: PdfPage[] = []
-  for (let y = 0; y < canvas.height; y += slicePx) {
-    const h = Math.min(slicePx, canvas.height - y)
-    const slice = document.createElement('canvas')
-    slice.width = canvas.width
-    slice.height = h
-    const ctx = slice.getContext('2d')
-    if (ctx === null) throw new Error('no 2d context')
-    ctx.fillStyle = '#ffffff'
-    ctx.fillRect(0, 0, slice.width, h)
-    ctx.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h)
-    const jpeg = await new Promise<Blob | null>((resolve) => slice.toBlob(resolve, 'image/jpeg', 0.92))
-    if (jpeg === null) throw new Error('toBlob failed')
-    pages.push({
-      jpeg: new Uint8Array(await jpeg.arrayBuffer()),
-      widthPx: IMAGE_WIDTH,
-      heightPx: Math.ceil(h / IMAGE_SCALE),
-    })
+export async function exportRasterPdf(
+  html: string,
+  fileName: string,
+  options?: RasterExportOptions,
+): Promise<void> {
+  const stage = await RasterStage.create(html)
+  try {
+    const pages: PdfPage[] = []
+    const pageCount = Math.ceil(stage.totalHeight / PAGE_CSS_HEIGHT)
+    let done = 0
+    for await (const piece of iterTiles(stage, options?.signal)) {
+      const tile = await stage.tile(piece.offset, piece.height)
+      // 切页：片内按 A4 页高切片（末页取余量）。
+      for (let y = 0; y < piece.height; y += PAGE_CSS_HEIGHT) {
+        const pageCssHeight = Math.min(PAGE_CSS_HEIGHT, piece.height - y)
+        const sliceDevH = pageCssHeight * IMAGE_SCALE
+        const yDev = y * IMAGE_SCALE
+        const slice = document.createElement('canvas')
+        slice.width = tile.width
+        slice.height = sliceDevH
+        const ctx = slice.getContext('2d')
+        if (ctx === null) throw new Error('no 2d context')
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, slice.width, sliceDevH)
+        ctx.drawImage(tile, 0, yDev, tile.width, sliceDevH, 0, 0, tile.width, sliceDevH)
+        const jpeg = await new Promise<Blob | null>((resolve) =>
+          slice.toBlob(resolve, 'image/jpeg', 0.92),
+        )
+        if (jpeg === null) throw new Error('toBlob failed')
+        pages.push({
+          jpeg: new Uint8Array(await jpeg.arrayBuffer()),
+          widthPx: IMAGE_WIDTH,
+          heightPx: Math.ceil(sliceDevH / IMAGE_SCALE),
+        })
+        done += 1
+        options?.onProgress?.(done, pageCount)
+      }
+    }
+    download(fileName, 'application/pdf', buildRasterPdf(pages))
+  } finally {
+    stage.dispose()
   }
-  download(fileName, 'application/pdf', buildRasterPdf(pages))
 }

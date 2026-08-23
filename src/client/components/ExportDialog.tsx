@@ -64,6 +64,8 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsError, setSessionsError] = useState('')
   const [exporting, setExporting] = useState(false)
+  /** 光栅化进度文案（分片/页计数），空串表示无进度信息。 */
+  const [progressLabel, setProgressLabel] = useState('')
 
   /** 挂载标记：异步回调在 setState 前检查，防止卸载后更新状态。 */
   const mountedRef = useRef(true)
@@ -117,6 +119,7 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
   const handleExport = useCallback(async (): Promise<void> => {
     if (exporting) return
     setExporting(true)
+    setProgressLabel('')
     try {
       if (batch) {
         if (format === 'png') {
@@ -142,11 +145,15 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
         if (result.kind === 'file') {
           downloadBlob(base64ToBlob(result.contentBase64, result.mimeType), result.fileName)
         } else if (result.kind === 'raster') {
-          // 客户端光栅化：PNG 长图或免打印多页 PDF（无 window.print() 对话框）
+          // 客户端光栅化：PNG 长图或免打印多页 PDF（无 window.print() 对话框）；
+          // 分片进度经 onProgress 更新按钮文案（mounted 守卫）。
+          const onProgress = (done: number, total: number): void => {
+            if (mountedRef.current) setProgressLabel(`正在导出… ${done}/${total}`)
+          }
           if (result.target === 'png') {
-            await exportLongPng(result.html, result.fileName)
+            await exportLongPng(result.html, result.fileName, { onProgress })
           } else {
-            await exportRasterPdf(result.html, result.fileName)
+            await exportRasterPdf(result.html, result.fileName, { onProgress })
           }
         } else {
           // 旧契约降级路径：服务端返回可打印 HTML，新窗口写入并触发浏览器打印
@@ -159,7 +166,10 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
       if (!mountedRef.current) return
       Toast.push(error instanceof Error ? error.message : '导出失败，请稍后重试', 'error')
     } finally {
-      if (mountedRef.current) setExporting(false)
+      if (mountedRef.current) {
+        setExporting(false)
+        setProgressLabel('')
+      }
     }
   }, [exporting, batch, selectedIds, format, timestamps, redact, sessionId, onClose])
 
@@ -175,7 +185,7 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
           </Button>
           <Button variant="primary" onClick={() => void handleExport()} disabled={exporting}>
             {exporting ? (
-              <Spinner label="正在导出…" />
+              <Spinner label={progressLabel || '正在导出…'} />
             ) : batch ? (
               `导出所选（${selectedIds.size}）`
             ) : (
