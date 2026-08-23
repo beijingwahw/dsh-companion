@@ -4,6 +4,8 @@
 [![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)](https://github.com/topics/dsh-plugin)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-orange)](https://github.com/deepseek-ai/deepseek-harness)
 
+[English](README.en.md) | 中文
+
 > **版本说明**：本仓库为**精简版**，包含 A–D 四大基础模块（对话导出 / 交接摘要 / 成本优化 / 全局检索）。
 > 开发者版（A–J 九大模块，含执行轨迹分析、Prompt 工作台、多模型竞技场、任务编排、安全审计）请见 [beijingwahw/dsh-companion-dev](https://github.com/beijingwahw/dsh-companion-dev)。
 
@@ -203,7 +205,7 @@ src/
 
 - [x] 完整 Harness 插件源码（`src/`，TypeScript strict）
 - [x] `manifest.json`（权限与隐私声明）、`package.json`、`cordis.patch.yml`（bundle patch 层）、`tsconfig.json`
-- [x] `README.md`（本文件）：功能介绍、安装指南、使用说明
+- [x] `README.md` / `README.en.md`（双语）：功能介绍、安装指南、使用说明
 - [x] `DESIGN.md`：架构契约与开发规范
 - [x] 四模块独立启停：配置开关 + 独立子插件 + manifest 模块声明三层保障
 
