@@ -104,6 +104,9 @@ export async function chatCompletion(params: ChatCompletionParams): Promise<Chat
   }
   if (params.temperature !== undefined) body.temperature = params.temperature
   if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens
+  // JSON 输出模式（OpenAI 兼容的 response_format: json_object）：
+  // 缺失时该开关是静默 no-op——调用方以为拿到了 JSON 契约，实际是普通文本。
+  if (params.jsonMode === true) body.response_format = { type: 'json_object' }
 
   let response: Response
   try {

@@ -140,6 +140,10 @@ function parseHostHeader(host: string): { hostname: string; port: string } {
  * Origin/Referer 值与请求 Host 是否同源（主机名与端口一致）。
  * Origin 形如 `http://127.0.0.1:3210`；Referer 是完整 URL，URL 解析通吃。
  * 缺省端口按协议补齐（http→80、https→443）；解析失败按不同源处理。
+ *
+ * Host 头未携带显式端口（经反向代理/TLS 终止器部署在 443，或裸 80）：
+ * 接受来源协议的任一默认端口（80/443）——此时端口无从比对，主机名才是
+ * 有效判据；来源端口非默认（如 8080）仍拒绝，跨端口重绑定防线不变。
  */
 function isSameOrigin(sourceValue: string, hostHeader: string): boolean {
   let source: URL
@@ -150,8 +154,10 @@ function isSameOrigin(sourceValue: string, hostHeader: string): boolean {
   }
   const host = parseHostHeader(hostHeader)
   const sourcePort = source.port || (source.protocol === 'https:' ? '443' : '80')
-  const hostPort = host.port || '80'
-  return source.hostname === host.hostname && sourcePort === hostPort
+  if (host.port === '') {
+    return source.hostname === host.hostname && (sourcePort === '80' || sourcePort === '443')
+  }
+  return source.hostname === host.hostname && sourcePort === host.port
 }
 
 /** 发送 JSON 响应。 */
