@@ -6,7 +6,8 @@
  * - 用量达 100%：告警一次（error）并暂停非必要调用
  *   （抛 DeepSeekApiError 'INSUFFICIENT_BALANCE'；essential 调用仍放行）。
  * 任一档（日或月）用尽即暂停。告警去重经 Domain 表 `budget-state`
- * （键=北京日/月周期键）持久化，每周期每级只告警一次；
+ * （键=北京日/月周期键 + 预算值口径：预算调整后视为新阈值周期，
+ * 两级标记自动重置），每周期每级只告警一次；
  * 进程内另以 Set 防并发重复。
  *
  * 调用期权协议（预授权-结算两阶段提交）：
@@ -19,8 +20,9 @@
  * 「并发数 × 单次全额」降为「并发数 × 估算误差」。预留带 TTL 懒回收
  * （惰性清扫，无空闲定时器）：超时未结算的孤儿预留（调用崩溃路径）在
  * 下次访问时自动释放；TTL 取 apiTimeoutMs + 缓冲，覆盖在途调用窗口。
- * settle 同步推进 spent 缓存，使缓存窗口内的新增花费对闸门即时可见
- * （15s TTL 缓存由此退化为全量扫描的兜底优化，不再是精度近似）。
+ * settle 使 spent 缓存失效而非累加：结算费用已由核心服务在调用内
+ * await 落盘，失效后的全量扫描必然精确（旧累加实现在并发刷新恰好
+ * 插在记账与结算之间时双重计入）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Domain, KvTable } from '@deepseek-ai/dsh-storage'
@@ -34,6 +36,8 @@ import type { CostSettings } from './settings.js'
 export interface BudgetStateRecord {
   alerted80: boolean
   alerted100: boolean
+  /** 记录对应的预算值（元）：预算调整后视为新周期，两级标记自动重置。 */
+  budgetCny: number
 }
 
 /** 预算状态快照（供 /cost/state 等展示）。 */
@@ -123,7 +127,8 @@ export class BudgetGuard {
   async check(essential: boolean): Promise<void> {
     const settings = this.getSettings()
     const now = Date.now()
-    // 日预算档：用尽即拦截（80% 告警不拦截）。
+    // 日预算档：用尽即拦截（80% 告警不拦截）。essential 透支放行时
+    // 不提前 return——月档仍需检查与告警（双档独立判定）。
     if (settings.dailyBudgetCny > 0) {
       const spentCny = this.spentToday(now)
       if (spentCny >= settings.dailyBudgetCny) {
@@ -131,13 +136,11 @@ export class BudgetGuard {
         if (!essential) {
           throw new DeepSeekApiError('今日预算已用尽，非必要调用已暂停', 'INSUFFICIENT_BALANCE')
         }
-        return
-      }
-      if (spentCny >= settings.dailyBudgetCny * 0.8) {
+      } else if (spentCny >= settings.dailyBudgetCny * 0.8) {
         await this.alertOnce('daily', beijingDayKey(now), 80, spentCny, settings.dailyBudgetCny)
       }
     }
-    // 月预算档。
+    // 月预算档（else-if：已按 100% 告警的周期不再叠加 80% 告警）。
     if (settings.monthlyBudgetCny <= 0) return // 0 = 不限
     const spentCny = this.spentThisMonth(now)
     if (spentCny >= settings.monthlyBudgetCny) {
@@ -145,9 +148,7 @@ export class BudgetGuard {
       if (!essential) {
         throw new DeepSeekApiError('月度预算已用尽，非必要调用已暂停', 'INSUFFICIENT_BALANCE')
       }
-      return
-    }
-    if (spentCny >= settings.monthlyBudgetCny * 0.8) {
+    } else if (spentCny >= settings.monthlyBudgetCny * 0.8) {
       await this.alertOnce('monthly', beijingMonthKey(now), 80, spentCny, settings.monthlyBudgetCny)
     }
   }
@@ -240,29 +241,19 @@ export class BudgetGuard {
   }
 
   /**
-   * 结算推进 spent 缓存：结算的实际费用已由核心服务记账落盘（usage.record），
-   * 此处同步累加缓存值使闸门即时可见。并发下若他方恰好全量刷新了缓存，
-   * 存在短暂保守方向的重复计入（自愈于缓存 TTL 内，闸门偏严不偏松）。
+   * 结算失效 spent 缓存：结算的实际费用已由核心服务在 callDeepSeek 内
+   * await usage.record 落盘（settle 晚于记账完成），此处使缓存失效即可——
+   * 下次访问的全量扫描必然包含该笔费用，值精确且无重复计入。
+   * 旧实现的「缓存累加」在并发全量刷新恰落在记账与 settle 之间时会
+   * 双重计入（且顺带续期 TTL，延长偏差窗口）；失效则两个方向都不偏。
    */
   private applySettlement(actualCny: number): void {
     if (!Number.isFinite(actualCny) || actualCny <= 0) return
     const now = Date.now()
     const dayKey = beijingDayKey(now)
     const monthKey = beijingMonthKey(now)
-    if (this.dailyCache && this.dailyCache.periodKey === dayKey) {
-      this.dailyCache = {
-        ...this.dailyCache,
-        spentCny: round4(this.dailyCache.spentCny + actualCny),
-        atMs: now,
-      }
-    }
-    if (this.monthlyCache && this.monthlyCache.periodKey === monthKey) {
-      this.monthlyCache = {
-        ...this.monthlyCache,
-        spentCny: round4(this.monthlyCache.spentCny + actualCny),
-        atMs: now,
-      }
-    }
+    if (this.dailyCache?.periodKey === dayKey) this.dailyCache = undefined
+    if (this.monthlyCache?.periodKey === monthKey) this.monthlyCache = undefined
   }
 
   /** 惰性清扫：释放超时未结算的孤儿预留（调用崩溃路径），无空闲定时器。 */
@@ -350,19 +341,26 @@ export class BudgetGuard {
     includesReserved = false,
   ): Promise<void> {
     // 存储键带档位前缀：日键（YYYY-MM-DD）与月键（YYYY-MM）天然不冲突，
-    // 前缀仅为可读性与防御。
+    // 前缀仅为可读性与防御。去重键再纳入预算值：预算调整后视为新阈值
+    // 周期，新预算的告警不被旧预算的已告警标记吞掉。
     const storeKey = `${tier}:${period}`
-    const dedupeKey = `${storeKey}:${level}`
+    const dedupeKey = `${storeKey}:${level}:${budgetCny}`
     if (this.alerted.has(dedupeKey)) return
     const record = this.table.get(storeKey)
-    if (record && (level === 80 ? record.alerted80 : record.alerted100)) {
+    const sameBudget = record !== undefined && record.budgetCny === budgetCny
+    if (sameBudget && (level === 80 ? record.alerted80 : record.alerted100)) {
       this.alerted.add(dedupeKey)
       return
     }
     try {
       await this.table.update(storeKey, (prev) => {
-        const base: BudgetStateRecord = prev ?? { alerted80: false, alerted100: false }
-        return level === 80 ? { ...base, alerted80: true } : { ...base, alerted100: true }
+        // 预算变化（含旧版无 budgetCny 字段的历史记录）：两级标记重置，
+        // 只保留本次告警级别；同预算则累加标记。
+        const carry = prev !== undefined && prev.budgetCny === budgetCny ? prev : undefined
+        const base: BudgetStateRecord = carry ?? { alerted80: false, alerted100: false, budgetCny }
+        return level === 80
+          ? { ...base, alerted80: true, budgetCny }
+          : { ...base, alerted100: true, budgetCny }
       })
       // 仅在写盘成功后标记去重：失败时保留重试与再次告警的机会。
       this.alerted.add(dedupeKey)

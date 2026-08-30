@@ -22,9 +22,13 @@ export declare const DEFAULT_PEAK_WINDOWS: ReadonlyArray<readonly [number, numbe
  * （DeepSeek 将其并入普通输入）；未知价格计 0（tokens 仍被统计）。
  */
 export declare function costOf(price: ModelPrice | undefined, usage: UsageLike): number;
-/** 某北京时间时刻是否处于任一高峰窗口。 */
+/** 某北京时间时刻是否处于任一高峰窗口。支持跨午夜窗口（start > end 时按环绕处理）。 */
 export declare function isPeakTimeAt(atMs: number, windows?: ReadonlyArray<readonly [number, number]>): boolean;
-/** 在某价格表与时刻下解析模型单价（分时计划感知）。 */
+/**
+ * 在某价格表与时刻下解析模型单价（分时计划感知）。
+ * 分时表未覆盖的模型回落平价表（current），避免官方仅对部分模型
+ * 公布分时价时其余模型被错误计为 0 元。
+ */
 export declare function resolvePrice(sheet: PriceSheet, model: string, atMs: number): ModelPrice | undefined;
 /** 带超时抓取 URL 文本。 */
 export declare function fetchText(url: string, timeoutMs: number, headers?: Record<string, string>): Promise<string>;

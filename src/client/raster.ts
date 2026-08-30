@@ -35,6 +35,47 @@ const TILE_CSS_HEIGHT = PAGE_CSS_HEIGHT * PAGES_PER_TILE
 const MAX_TOTAL_CSS_HEIGHT = 200_000
 /** 旧路径单 canvas 高度上限（无 CompressionStream 环境的降级截断）。 */
 const LEGACY_MAX_HEIGHT = 16000
+/**
+ * 单步光栅/编码操作超时（毫秒）：img.decode()、canvas.toBlob 与
+ * CompressionStream 读写依赖宿主回调，个别环境（如离屏 canvas 被回收、
+ * 压缩流内部错误未传播）会永不结算——没有兜底则导出按钮永久转圈、
+ * stage 离屏节点永久滞留。超时视同该步失败，走既有异常清理路径。
+ */
+const STEP_TIMEOUT_MS = 30_000
+
+/**
+ * 给 Promise 套超时：超时拒绝并放弃原 Promise 的结果（不取消底层操作，
+ * 但调用方的异常路径会完成全部清理）。
+ */
+function withTimeout<T>(promise: Promise<T>, message: string, ms: number = STEP_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+/** canvas → Blob，附超时与 null 检测（toBlob 失败回调 null）。 */
+async function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  mime: string,
+  quality?: number,
+): Promise<Blob> {
+  const blob = await withTimeout(
+    new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime, quality)),
+    `canvas ${mime} 编码超时`,
+  )
+  if (blob === null) throw new Error('toBlob failed')
+  return blob
+}
 
 /** 单页 PDF 的图像载荷。 */
 interface PdfPage {
@@ -49,10 +90,12 @@ interface PdfPage {
 /** 导出进度回调：done 已完成片/页数，total 总数。 */
 export type RasterProgress = (done: number, total: number) => void
 
-/** 导出选项：进度回调与取消信号。 */
+/** 导出选项：进度回调、取消信号与截断提示回调。 */
 export interface RasterExportOptions {
   onProgress?: RasterProgress
   signal?: AbortSignal
+  /** 内容高度超出产品上限被封顶截断时回调（供调用方提示用户）。 */
+  onTruncated?: () => void
 }
 
 /**
@@ -73,19 +116,71 @@ function toStageContent(html: string): { styles: string; bodyInner: string; body
 }
 
 /**
+ * 把 body 声明改写为「容器安全」形态：垂直 margin 归零、等量转为
+ * padding（padding 可靠计入 scrollHeight 且不会经外边距折叠丢失，
+ * 也不需要 translateY 补偿），水平居中的 auto margin 保留。
+ * 保证测高与 foreignObject 光栅化两个上下文按同一盒模型布局。
+ */
+function toContainerStyle(bodyStyle: string): string {
+  const decls = bodyStyle
+    .split(';')
+    .map((d) => d.trim())
+    .filter((d) => d !== '')
+  const out: string[] = []
+  let padTop: string | undefined
+  let padBottom: string | undefined
+  for (const decl of decls) {
+    const sep = decl.indexOf(':')
+    if (sep <= 0) continue
+    const prop = decl.slice(0, sep).trim().toLowerCase()
+    const value = decl.slice(sep + 1).trim()
+    if (prop === 'margin') {
+      // margin: <top> <right?> <bottom?> <left?> → 垂直段转 padding、水平段保留 auto。
+      const parts = value.split(/\s+/)
+      const top = parts[0] ?? '0'
+      const bottom = parts.length >= 3 ? parts[2] : top
+      const right = parts.length >= 2 ? parts[1] : '0'
+      const left = parts.length >= 4 ? parts[3] : right
+      if (top !== '0') padTop = top
+      if (bottom !== '0') padBottom = bottom
+      out.push(`margin:0 ${right === left ? right : `${right} ${left}`}`)
+      continue
+    }
+    if (prop === 'margin-top') {
+      if (value !== '0') padTop = value
+      continue
+    }
+    if (prop === 'margin-bottom') {
+      if (value !== '0') padBottom = value
+      continue
+    }
+    out.push(`${prop}:${value}`)
+  }
+  if (padTop !== undefined) out.unshift(`padding-top:${padTop}`)
+  if (padBottom !== undefined) out.push(`padding-bottom:${padBottom}`)
+  // 显式文字色：宿主继承色在 SVG 图像上下文不可用，防止白底白字。
+  if (!out.some((d) => d.startsWith('color:'))) out.push('color:#111111')
+  return out.join(';')
+}
+
+/**
  * 将容器内全部 <img> 内联为 data: URL，使 SVG foreignObject 光栅可嵌入图片
  * （SVG 图像内部禁止外部资源请求）。
  * @param root 就地内联图片的容器。
  */
-async function inlineImages(root: HTMLElement): Promise<void> {
+async function inlineImages(root: HTMLElement, signal?: AbortSignal): Promise<void> {
   const imgs = Array.from(root.querySelectorAll('img'))
   await Promise.all(
     imgs.map(async (img) => {
       const src = img.getAttribute('src') ?? ''
       if (src === '' || src.startsWith('data:')) return
       try {
-        const res = await fetch(src)
-        if (!res.ok) return
+        const res = await fetch(src, { signal })
+        if (!res.ok) {
+          // 不可达的图片：移除，避免 SVG 光栅上下文渲染破图。
+          img.remove()
+          return
+        }
         const blob = await res.blob()
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader()
@@ -109,14 +204,18 @@ async function inlineImages(root: HTMLElement): Promise<void> {
 class RasterStage {
   private constructor(
     private readonly stage: HTMLElement,
-    private readonly bodyStyle: string,
     /** 整篇内容高度（CSS px，已封顶 MAX_TOTAL_CSS_HEIGHT）。 */
     readonly totalHeight: number,
+    /** 实际内容高度超出 MAX_TOTAL_CSS_HEIGHT 被封顶截断。 */
+    readonly truncated: boolean,
   ) {}
 
   /** 构建舞台：解析 HTML → 离屏挂载 → 内联图片 → 布局沉淀 → 测高。 */
-  static async create(html: string): Promise<RasterStage> {
+  static async create(html: string, options?: RasterExportOptions): Promise<RasterStage> {
     const { styles, bodyInner, bodyStyle } = toStageContent(html)
+    // 测高与光栅化共用同一容器样式：布局（列宽/字体/行高/换行）在两个
+    // 上下文一致，totalHeight 才与实际渲染高度吻合，分片与页界不漂移。
+    const containerStyle = toContainerStyle(bodyStyle)
     const stage = document.createElement('div')
     stage.style.cssText =
       `position:fixed;left:-100000px;top:0;width:${IMAGE_WIDTH}px;pointer-events:none;z-index:-1;`
@@ -124,15 +223,18 @@ class RasterStage {
     style.textContent = styles
     stage.appendChild(style)
     const content = document.createElement('div')
+    content.setAttribute('style', `${containerStyle};width:${IMAGE_WIDTH}px;box-sizing:border-box;`)
     content.innerHTML = bodyInner
     stage.appendChild(content)
     document.body.appendChild(stage)
     try {
-      await inlineImages(stage)
+      await inlineImages(stage, options?.signal)
       // 等待内联图片完成布局沉淀。
       await new Promise((resolve) => setTimeout(resolve, 60))
-      const totalHeight = Math.max(1, Math.min(Math.ceil(stage.scrollHeight), MAX_TOTAL_CSS_HEIGHT))
-      return new RasterStage(stage, bodyStyle, totalHeight)
+      const fullHeight = Math.ceil(stage.scrollHeight)
+      const totalHeight = Math.max(1, Math.min(fullHeight, MAX_TOTAL_CSS_HEIGHT))
+      if (fullHeight > MAX_TOTAL_CSS_HEIGHT) options?.onTruncated?.()
+      return new RasterStage(stage, totalHeight, fullHeight > MAX_TOTAL_CSS_HEIGHT)
     } catch (error) {
       stage.remove()
       throw error
@@ -148,16 +250,16 @@ class RasterStage {
    * 光栅化 [offset, offset + height) 窗口到 2x canvas。
    * 窗口经克隆根的 translateY(−offset) 位移实现：foreignObject 视口裁剪
    * 视口外内容，浏览器只为窗口内像素付出光栅成本。
+   * 克隆根不重复携带 body 样式（内容子节点已带，两上下文同构）。
    * @throws 运行环境无法光栅化时抛出（无 canvas / SVG 解析失败）。
    */
   async tile(offset: number, height: number): Promise<HTMLCanvasElement> {
     // 序列化干净克隆：不带离屏偏移（否则内容会移出 SVG 视口），
-    // 显式 XHTML 命名空间保证 foreignObject 载荷格式合法；
-    // 原 body 样式声明直接落到克隆根节点（foreignObject 内无 body 元素）。
+    // 显式 XHTML 命名空间保证 foreignObject 载荷格式合法。
     const clone = this.stage.cloneNode(true) as HTMLElement
     clone.setAttribute(
       'style',
-      `${this.bodyStyle};width:${IMAGE_WIDTH}px;background:#ffffff;transform:translateY(-${offset}px);`,
+      `width:${IMAGE_WIDTH}px;background:#ffffff;transform:translateY(-${offset}px);`,
     )
     clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml')
     const serialized = new XMLSerializer().serializeToString(clone)
@@ -171,7 +273,7 @@ class RasterStage {
 
     const img = new Image()
     img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-    await img.decode()
+    await withTimeout(img.decode(), '光栅化图像解码超时')
 
     const canvas = document.createElement('canvas')
     canvas.width = IMAGE_WIDTH * IMAGE_SCALE
@@ -424,7 +526,20 @@ class StreamingPngEncoder {
     }
     // 携带本片最后一行原始字节：下一片首行的 Up/Paeth 过滤需要真实上一行。
     this.carriedPrev = data.slice((height - 1) * bytesPerRow, height * bytesPerRow)
-    await this.writer.write(out)
+    // 写入可能因压缩流内部故障或背压永不释放而挂起：超时兜底。
+    await withTimeout(this.writer.write(out), 'PNG 压缩写入超时')
+  }
+
+  /** 中止编码：放弃剩余输出并释放压缩流（异常/取消路径的清理出口）。 */
+  async abort(): Promise<void> {
+    if (this.finished) return
+    this.finished = true
+    try {
+      await this.writer.abort(new Error('png encoder aborted'))
+    } catch {
+      // writer 可能已被取消/关闭：吞掉，泵侧统一收敛。
+    }
+    await this.pump.catch(() => undefined)
   }
 
   /** 关闭压缩流并组装完整 PNG Blob。 */
@@ -433,11 +548,11 @@ class StreamingPngEncoder {
     this.finished = true
     let closeError: unknown
     try {
-      await this.writer.close()
+      await withTimeout(this.writer.close(), 'PNG 压缩流关闭超时')
     } catch (error) {
       closeError = error
     }
-    await this.pump
+    await withTimeout(this.pump, 'PNG 压缩输出超时')
     if (this.pumpError !== undefined) throw this.pumpError
     if (closeError !== undefined) throw closeError
     const parts: BlobPart[] = [PNG_SIGNATURE, pngChunk('IHDR', ihdrBytes(this.widthPx, this.heightPx))]
@@ -577,15 +692,19 @@ export async function exportLongPng(
     await exportLongPngLegacy(html, fileName, options)
     return
   }
-  const stage = await RasterStage.create(html)
+  const stage = await RasterStage.create(html, options)
+  const encoder = new StreamingPngEncoder(IMAGE_WIDTH * IMAGE_SCALE, stage.totalHeight * IMAGE_SCALE)
   try {
-    const encoder = new StreamingPngEncoder(IMAGE_WIDTH * IMAGE_SCALE, stage.totalHeight * IMAGE_SCALE)
     for await (const piece of iterTiles(stage, options?.signal)) {
       const tile = await stage.tile(piece.offset, piece.height)
       await encoder.pushTile(tile)
       options?.onProgress?.(piece.index + 1, piece.total)
     }
     download(fileName, 'image/png', await encoder.finish())
+  } catch (error) {
+    // 异常/取消路径同样要释放压缩流，否则 writable 保持锁定、缓冲滞留。
+    await encoder.abort().catch(() => undefined)
+    throw error
   } finally {
     stage.dispose()
   }
@@ -597,14 +716,13 @@ async function exportLongPngLegacy(
   fileName: string,
   options?: RasterExportOptions,
 ): Promise<void> {
-  const stage = await RasterStage.create(html)
+  const stage = await RasterStage.create(html, options)
   try {
     throwIfAborted(options?.signal)
     const height = Math.min(stage.totalHeight, LEGACY_MAX_HEIGHT)
+    if (stage.truncated || height < stage.totalHeight) options?.onTruncated?.()
     const canvas = await stage.tile(0, height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (blob === null) throw new Error('toBlob failed')
-    download(fileName, 'image/png', blob)
+    download(fileName, 'image/png', await canvasToBlob(canvas, 'image/png'))
   } finally {
     stage.dispose()
   }
@@ -623,7 +741,7 @@ export async function exportRasterPdf(
   fileName: string,
   options?: RasterExportOptions,
 ): Promise<void> {
-  const stage = await RasterStage.create(html)
+  const stage = await RasterStage.create(html, options)
   try {
     const pages: PdfPage[] = []
     const pageCount = Math.ceil(stage.totalHeight / PAGE_CSS_HEIGHT)
@@ -643,10 +761,7 @@ export async function exportRasterPdf(
         ctx.fillStyle = '#ffffff'
         ctx.fillRect(0, 0, slice.width, sliceDevH)
         ctx.drawImage(tile, 0, yDev, tile.width, sliceDevH, 0, 0, tile.width, sliceDevH)
-        const jpeg = await new Promise<Blob | null>((resolve) =>
-          slice.toBlob(resolve, 'image/jpeg', 0.92),
-        )
-        if (jpeg === null) throw new Error('toBlob failed')
+        const jpeg = await canvasToBlob(slice, 'image/jpeg', 0.92)
         pages.push({
           jpeg: new Uint8Array(await jpeg.arrayBuffer()),
           widthPx: IMAGE_WIDTH,

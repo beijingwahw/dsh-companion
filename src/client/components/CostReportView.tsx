@@ -48,18 +48,23 @@ type RangeDays = 7 | 28
 /** /cost/state 轮询间隔（毫秒）。 */
 const POLL_INTERVAL_MS = 60_000
 
-/** 本地日期 → YYYY-MM-DD（服务端按北京时间聚合，客户端以本地日期近似）。 */
-function dayKey(date: Date): string {
-  const month = `${date.getMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getDate()}`.padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
+/** 北京时间偏移（UTC+8，毫秒）：服务端按北京时间聚合，客户端区间必须对齐同一时钟。 */
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000
+
+/** 时间戳 → 北京时间 YYYY-MM-DD（与服务端 core/time.ts 的 beijingDayKey 语义一致）。
+ * 原实现取本地日期：非 UTC+8 时区下「今天」的边界会与服务端差一天，
+ * 首末日柱状图与汇总对不上。 */
+function dayKey(ts: number): string {
+  const d = new Date(ts + BEIJING_OFFSET_MS)
+  const month = `${d.getUTCMonth() + 1}`.padStart(2, '0')
+  const day = `${d.getUTCDate()}`.padStart(2, '0')
+  return `${d.getUTCFullYear()}-${month}-${day}`
 }
 
-/** 计算近 N 天的 [from, to] 区间。 */
+/** 计算近 N 天（北京时间）的 [from, to] 区间。 */
 function rangeFor(days: RangeDays): { from: string; to: string } {
-  const to = new Date()
-  const from = new Date(to.getTime() - (days - 1) * 86_400_000)
-  return { from: dayKey(from), to: dayKey(to) }
+  const now = Date.now()
+  return { from: dayKey(now - (days - 1) * 86_400_000), to: dayKey(now) }
 }
 
 /** 金额格式化（元，保留 4 位小数）。 */

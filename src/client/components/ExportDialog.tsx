@@ -113,6 +113,9 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      // 卸载即中止进行中的导出：光栅化在后台继续只是白烧 CPU/内存，
+      // 而全部 setState 守卫已失效，产物与进度无处可去。
+      abortRef.current?.abort()
     }
   }, [])
 
@@ -275,6 +278,10 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
     const onProgress = (done: number, total: number): void => {
       if (mountedRef.current) setProgressLabel(`正在导出… ${done}/${total}`)
     }
+    // 内容高度超出产品上限被截断时显式告知（静默截断会让用户误以为导出完整）。
+    const onTruncated = (): void => {
+      if (mountedRef.current) Toast.push('内容过长，超出导出上限，已截断超出部分', 'warning')
+    }
     try {
       if (batch) {
         if (format === 'png') {
@@ -318,9 +325,17 @@ export function ExportDialog(props: ExportDialogProps): ReactElement {
           // 客户端光栅化：PNG 长图或免打印多页 PDF（无 window.print() 对话框）；
           // 分片进度经 onProgress 更新按钮文案，取消信号贯穿逐片光栅（mounted 守卫）。
           if (result.target === 'png') {
-            await exportLongPng(result.html, result.fileName, { onProgress, signal: controller.signal })
+            await exportLongPng(result.html, result.fileName, {
+              onProgress,
+              onTruncated,
+              signal: controller.signal,
+            })
           } else {
-            await exportRasterPdf(result.html, result.fileName, { onProgress, signal: controller.signal })
+            await exportRasterPdf(result.html, result.fileName, {
+              onProgress,
+              onTruncated,
+              signal: controller.signal,
+            })
           }
         } else {
           // 旧契约降级路径：服务端返回可打印 HTML，新窗口写入并触发浏览器打印

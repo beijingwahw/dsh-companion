@@ -13,6 +13,7 @@ export declare function sanitizeFileName(name: string): string;
  * 构建 ZIP 文件字节流。
  * @param entries 条目列表（名称在内部统一经 sanitizeFileName 强制清理）。
  * @returns 完整的 .zip 字节。
- * @throws 条目数超过 65535，或单条目超过 4GB（不支持 ZIP64）。
+ * @throws 条目数超过 65535、单条目超过 4GB，或累计偏移/中心目录超过 4GB
+ * （均不支持 ZIP64）。
  */
 export declare function buildZip(entries: readonly ZipEntry[]): Uint8Array;

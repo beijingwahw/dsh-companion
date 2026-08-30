@@ -5,6 +5,14 @@
  * （docs/subsystems/web-server.md），各功能模块通过
  * `ctx.companion.http.add(method, path, handler)` 挂载自己的端点；
  * 浏览器侧客户端（src/client）通过同源 fetch 调用这些端点。
+ *
+ * CSRF / DNS-rebinding 防线（createRouter.handle 内实施）：
+ * 变更类方法（POST/DELETE）若携带 Origin 或 Referer 头，则必须与请求
+ * Host 同源（主机名+端口一致）。浏览器对跨站表单 POST 与 no-cors fetch
+ * 同样会发送 Origin，攻击页伪造的 Origin/Referer 与本机 Host 不符即被
+ * 403 拒绝；DNS rebinding 下 Origin 是攻击者域名，同样被拒。两个头
+ * 均缺失（curl 等非浏览器客户端）放行——本服务无 Cookie/会话，非
+ * 浏览器客户端不受 CSRF 模型威胁，不设虚假防线。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -72,6 +80,17 @@ export function createRouter(basePath: string = '/companion'): CompanionRouter {
       if (!handler) {
         return sendJson(res, 404, { error: `no route: ${key}` })
       }
+      // 变更类方法的同源校验（详见文件头注释）：在读 body 前快速失败。
+      const method = req.method ?? 'GET'
+      if (method === 'POST' || method === 'DELETE') {
+        const sourceHeader = req.headers.origin ?? req.headers.referer
+        const hostHeader = req.headers.host
+        if (typeof sourceHeader === 'string' && sourceHeader !== '' && typeof hostHeader === 'string') {
+          if (!isSameOrigin(sourceHeader, hostHeader)) {
+            return sendJson(res, 403, { error: 'cross-origin request rejected' })
+          }
+        }
+      }
       try {
         const body =
           req.method === 'GET' || req.method === 'HEAD' ? undefined : await readJsonBody(req)
@@ -92,6 +111,47 @@ export function createRouter(basePath: string = '/companion'): CompanionRouter {
       }
     },
   }
+}
+
+/** 解析 Host 头为主机名与端口（小写；IPv6 字面量 `[::1]:3000` 正确处理）。 */
+function parseHostHeader(host: string): { hostname: string; port: string } {
+  const trimmed = host.trim().toLowerCase()
+  if (trimmed.startsWith('[')) {
+    // IPv6 字面量：] 之前是主机名，其后可有 :port。
+    const close = trimmed.indexOf(']')
+    if (close !== -1) {
+      const rest = trimmed.slice(close + 1)
+      return {
+        hostname: trimmed.slice(1, close),
+        port: rest.startsWith(':') ? rest.slice(1) : '',
+      }
+    }
+    return { hostname: trimmed, port: '' }
+  }
+  // IPv4 / 域名：最后一个冒号是端口分隔（多个冒号说明是裸 IPv6，无端口）。
+  const colon = trimmed.lastIndexOf(':')
+  if (colon !== -1 && trimmed.indexOf(':') === colon) {
+    return { hostname: trimmed.slice(0, colon), port: trimmed.slice(colon + 1) }
+  }
+  return { hostname: trimmed, port: '' }
+}
+
+/**
+ * Origin/Referer 值与请求 Host 是否同源（主机名与端口一致）。
+ * Origin 形如 `http://127.0.0.1:3210`；Referer 是完整 URL，URL 解析通吃。
+ * 缺省端口按协议补齐（http→80、https→443）；解析失败按不同源处理。
+ */
+function isSameOrigin(sourceValue: string, hostHeader: string): boolean {
+  let source: URL
+  try {
+    source = new URL(sourceValue)
+  } catch {
+    return false
+  }
+  const host = parseHostHeader(hostHeader)
+  const sourcePort = source.port || (source.protocol === 'https:' ? '443' : '80')
+  const hostPort = host.port || '80'
+  return source.hostname === host.hostname && sourcePort === hostPort
 }
 
 /** 发送 JSON 响应。 */

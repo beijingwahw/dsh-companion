@@ -229,8 +229,11 @@ export async function listTurns(
   let snapshot: SessionLogSnapshot
   try {
     snapshot = await sessionQuery.readSession(sessionId)
-  } catch {
-    throw new SessionReadError(sessionId)
+  } catch (error) {
+    // 与 buildExport 同一错误分级：仅「会话不存在」归 404，
+    // 系统性错误原样上抛（HTTP 层收敛为 500），不被伪装成 404。
+    if (isSessionMissingError(error)) throw new SessionReadError(sessionId)
+    throw error
   }
   const turns = transcriptFromLog(snapshot)
   return {
@@ -269,6 +272,18 @@ export function userFacingMessage(error: unknown, fallbackMessage: string): stri
   return fallbackMessage
 }
 
+/**
+ * 判定读取异常是否为「会话不存在」类：harness 的 readSession 未提供
+ * 类型化错误，以消息特征启发式归类（not found / no such / ENOENT /
+ * 不存在 / 无会话）。其余（存储 I/O、日志校验失败等）视为系统性错误：
+ * 不得伪装成 404 被批量导出静默跳过，须原样上抛（HTTP 层收敛为 500）。
+ */
+function isSessionMissingError(error: unknown): boolean {
+  return (
+    error instanceof Error && /not\s*found|no\s*such|enoent|不存在|无会话|无此会话/i.test(error.message)
+  )
+}
+
 /** 读取会话并渲染为导出中间产物。 */
 async function buildExport(
   sessionQuery: SessionQueryEngine,
@@ -278,10 +293,12 @@ async function buildExport(
   let snapshot: SessionLogSnapshot
   try {
     snapshot = await sessionQuery.readSession(sessionId)
-  } catch {
-    // 归类为单会话读取失败（批量导出可跳过）；
-    // 渲染/打包阶段的错误不经此包装，将以系统性错误上抛。
-    throw new SessionReadError(sessionId)
+  } catch (error) {
+    // 仅「会话不存在」归类为 SessionReadError（批量可跳过、HTTP 404）；
+    // 存储故障等系统性错误原样上抛（HTTP 500 / 批量整体失败），
+    // 与 buildBatchExport 的错误分级注释语义对齐。
+    if (isSessionMissingError(error)) throw new SessionReadError(sessionId)
+    throw error
   }
 
   const timestamps = options.timestamps ?? true

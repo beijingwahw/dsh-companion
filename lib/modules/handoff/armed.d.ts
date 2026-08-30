@@ -69,8 +69,13 @@ export declare class ArmedStore {
      * 消费 pending 武装：删除并返回摘要；不存在返回 undefined。
      * 用一次 table.update 原子地读取并删除（回调返回 undefined 即删除该键），
      * 避免 get→await delete 的间隙中新武装的摘要被误删。
+     * @param expect 身份校验（armedAt + summary）：记录在 peek 与消费之间
+     * 被新武装覆盖时不误删新记录（返回 undefined，新记录留给后续装配投递）。
      */
-    consumePending(): Promise<string | undefined>;
+    consumePending(expect?: {
+        armedAt: number;
+        summary: string;
+    }): Promise<string | undefined>;
     /** 写入投递回执（按会话覆盖），并滚动修剪到最近 RECEIPT_KEEP_LIMIT 条。 */
     writeReceipt(sessionId: string): Promise<void>;
     /** 列出投递回执（按注入时间降序，同步读）。 */

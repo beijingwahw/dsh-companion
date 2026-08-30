@@ -28,10 +28,12 @@ interface PdfPage {
 }
 /** 导出进度回调：done 已完成片/页数，total 总数。 */
 export type RasterProgress = (done: number, total: number) => void;
-/** 导出选项：进度回调与取消信号。 */
+/** 导出选项：进度回调、取消信号与截断提示回调。 */
 export interface RasterExportOptions {
     onProgress?: RasterProgress;
     signal?: AbortSignal;
+    /** 内容高度超出产品上限被封顶截断时回调（供调用方提示用户）。 */
+    onTruncated?: () => void;
 }
 /**
  * 组装最小多页 PDF：每页一张 JPEG（能力吸收自 dsh-conv-export 的 buildPdf）。

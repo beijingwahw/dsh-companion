@@ -6,7 +6,8 @@
  * - 用量达 100%：告警一次（error）并暂停非必要调用
  *   （抛 DeepSeekApiError 'INSUFFICIENT_BALANCE'；essential 调用仍放行）。
  * 任一档（日或月）用尽即暂停。告警去重经 Domain 表 `budget-state`
- * （键=北京日/月周期键）持久化，每周期每级只告警一次；
+ * （键=北京日/月周期键 + 预算值口径：预算调整后视为新阈值周期，
+ * 两级标记自动重置），每周期每级只告警一次；
  * 进程内另以 Set 防并发重复。
  *
  * 调用期权协议（预授权-结算两阶段提交）：
@@ -19,8 +20,9 @@
  * 「并发数 × 单次全额」降为「并发数 × 估算误差」。预留带 TTL 懒回收
  * （惰性清扫，无空闲定时器）：超时未结算的孤儿预留（调用崩溃路径）在
  * 下次访问时自动释放；TTL 取 apiTimeoutMs + 缓冲，覆盖在途调用窗口。
- * settle 同步推进 spent 缓存，使缓存窗口内的新增花费对闸门即时可见
- * （15s TTL 缓存由此退化为全量扫描的兜底优化，不再是精度近似）。
+ * settle 使 spent 缓存失效而非累加：结算费用已由核心服务在调用内
+ * await 落盘，失效后的全量扫描必然精确（旧累加实现在并发刷新恰好
+ * 插在记账与结算之间时双重计入）。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Domain } from '@deepseek-ai/dsh-storage';
@@ -30,6 +32,8 @@ import type { CostSettings } from './settings.js';
 export interface BudgetStateRecord {
     alerted80: boolean;
     alerted100: boolean;
+    /** 记录对应的预算值（元）：预算调整后视为新周期，两级标记自动重置。 */
+    budgetCny: number;
 }
 /** 预算状态快照（供 /cost/state 等展示）。 */
 export interface BudgetSnapshot {
@@ -106,9 +110,11 @@ export declare class BudgetGuard {
     /** 在途预留合计（元）。 */
     reservedTotalCny(): number;
     /**
-     * 结算推进 spent 缓存：结算的实际费用已由核心服务记账落盘（usage.record），
-     * 此处同步累加缓存值使闸门即时可见。并发下若他方恰好全量刷新了缓存，
-     * 存在短暂保守方向的重复计入（自愈于缓存 TTL 内，闸门偏严不偏松）。
+     * 结算失效 spent 缓存：结算的实际费用已由核心服务在 callDeepSeek 内
+     * await usage.record 落盘（settle 晚于记账完成），此处使缓存失效即可——
+     * 下次访问的全量扫描必然包含该笔费用，值精确且无重复计入。
+     * 旧实现的「缓存累加」在并发全量刷新恰落在记账与 settle 之间时会
+     * 双重计入（且顺带续期 TTL，延长偏差窗口）；失效则两个方向都不偏。
      */
     private applySettlement;
     /** 惰性清扫：释放超时未结算的孤儿预留（调用崩溃路径），无空闲定时器。 */

@@ -47,7 +47,8 @@ const MAX_ENTRY_BYTES = 0xffffffff
  * 构建 ZIP 文件字节流。
  * @param entries 条目列表（名称在内部统一经 sanitizeFileName 强制清理）。
  * @returns 完整的 .zip 字节。
- * @throws 条目数超过 65535，或单条目超过 4GB（不支持 ZIP64）。
+ * @throws 条目数超过 65535、单条目超过 4GB，或累计偏移/中心目录超过 4GB
+ * （均不支持 ZIP64）。
  */
 export function buildZip(entries: readonly ZipEntry[]): Uint8Array {
   if (entries.length > MAX_ENTRIES) {
@@ -103,6 +104,17 @@ export function buildZip(entries: readonly ZipEntry[]): Uint8Array {
 
     offset += 30 + nameBytes.byteLength + size
     centralSize += 46 + nameBytes.byteLength
+    // 累计偏移（中心目录起始位置）与中心目录总大小同为 32 位字段：
+    // 单条目虽各 ≤4GB，多条目累计仍可能溢出——setUint32 会静默按
+    // 模 2^32 回绕，产出指向错误偏移的损坏 ZIP，必须显式失败。
+    if (offset > MAX_ENTRY_BYTES) {
+      throw new Error(
+        `zip: cumulative offset exceeds 4GB at entry "${entry.name}"; ZIP64 is not supported`,
+      )
+    }
+    if (centralSize > MAX_ENTRY_BYTES) {
+      throw new Error('zip: central directory exceeds 4GB; ZIP64 is not supported')
+    }
   }
 
   const eocd = new DataView(new ArrayBuffer(22))

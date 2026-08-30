@@ -39,7 +39,11 @@ function memTable() {
       map.delete(key)
     },
     update: async (key: string, fn: (prev: unknown) => unknown) => {
-      map.set(key, fn(map.get(key)))
+      // 与插件契约一致：回调返回 undefined 表示删除该键
+      //（避免 dev 桩语义与生产相反、掩盖真实 bug）。
+      const next = fn(map.get(key))
+      if (next === undefined) map.delete(key)
+      else map.set(key, next)
     },
   }
 }

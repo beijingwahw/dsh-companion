@@ -19,7 +19,12 @@ import { formatTranscript, transcriptFromLog } from '../../core/transcript.js'
 import type { SessionLogSnapshot } from '../../types/harness.js'
 import { ArmedStore } from './armed.js'
 import { buildHandoffPrompt, buildHandoffPromptWithTemplate } from './prompt.js'
-import { TemplateStore } from './templates.js'
+import {
+  MAX_TEMPLATES,
+  MAX_TEMPLATE_CONTENT_CHARS,
+  MAX_TEMPLATE_NAME_CHARS,
+  TemplateStore,
+} from './templates.js'
 
 /** 插件名（Cordis fiber 诊断名）。 */
 export const name = 'companion-handoff'
@@ -59,6 +64,14 @@ export function apply(ctx: Context): void {
   // （对齐 search 模块写法；各端点 await 时仍会正常得到错误响应）。
   storesReady.catch(() => undefined)
 
+  /**
+   * 进程内 pending 认领标记：装配回调在「决定注入」时同步认领，
+   * 堵住 peek（同步读）与 consumePending（异步落定）之间的窗口——
+   * 否则并发的新会话装配会各自 peek 到同一条 pending 而双重注入。
+   * 消费落定（成功/失败/身份不符）后释放，允许后续装配处理新武装。
+   */
+  let pendingClaim = false
+
   // ------------------------------------------------------------------
   // 系统提示词上下文：注入已武装的交接摘要
   // ------------------------------------------------------------------
@@ -96,17 +109,29 @@ export function apply(ctx: Context): void {
           if (pending.knownSessions !== undefined && pending.knownSessions.includes(scopeText)) {
             return ''
           }
-          // 原子消费（保留既有并发正确性）+ 投递回执（dock 可观测）。
+          // 同步认领：认领后、消费落定前的其他装配一律不再注入本条
+          // pending（双重注入防线，详见 pendingClaim 声明处注释）。
+          if (pendingClaim) return ''
+          pendingClaim = true
+          // 原子消费（带身份校验：peek 后被 re-arm 覆盖时不误删新记录）
+          // + 投递回执（dock 可观测）。
           queueMicrotask(() => {
-            // 消费失败静默降级（摘要至多重复注入一次），避免未处理 rejection。
             void store
-              .consumePending()
+              .consumePending({ armedAt: pending.armedAt, summary: pending.summary })
               .then((summary) => {
                 if (summary !== undefined) {
                   void store.writeReceipt(scopeText).catch(() => undefined)
                 }
+                // summary === undefined：记录已被新武装覆盖，新记录
+                // 留给后续装配投递，不误删。
               })
-              .catch(() => undefined)
+              .catch(() => {
+                // 消费失败静默降级并释放认领（摘要至多重复注入一次），
+                // 避免未处理 rejection。
+              })
+              .finally(() => {
+                pendingClaim = false
+              })
           })
           return renderHandoffSection(pending.summary)
         },
@@ -219,10 +244,20 @@ export function apply(ctx: Context): void {
       ctx.companion.http.add('POST', '/handoff/templates', async (_req, res, { body }) => {
         const record = readObject(body)
         const templateName = requireString(record.name, 'name')
+        if (templateName.length > MAX_TEMPLATE_NAME_CHARS) {
+          throw new HttpError(`name 长度不能超过 ${MAX_TEMPLATE_NAME_CHARS} 字符`, 400)
+        }
         if (typeof record.content !== 'string' || record.content.length === 0) {
           throw new HttpError('content 必须是非空字符串', 400)
         }
+        if (record.content.length > MAX_TEMPLATE_CONTENT_CHARS) {
+          throw new HttpError(`content 长度不能超过 ${MAX_TEMPLATE_CONTENT_CHARS} 字符`, 400)
+        }
         const stores = await storesReady
+        // 数量上限：覆盖已有模板不受限，新建时超出即 400。
+        if (stores.templates.get(templateName) === undefined && stores.templates.count >= MAX_TEMPLATES) {
+          throw new HttpError(`模板数量已达上限（${MAX_TEMPLATES}），请先删除不再使用的模板`, 400)
+        }
         await stores.templates.save(templateName, record.content)
         sendJson(res, 200, { ok: true })
       }),

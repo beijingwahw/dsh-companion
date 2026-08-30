@@ -116,6 +116,32 @@ function wholeWordOk(text: string, idx: number, end: number, needle: string): bo
 }
 
 /**
+ * 大小写折叠结果与原文的下标映射：`toLowerCase()` 可能令单字符膨胀为
+ * 多个码元（如 U+0130 'İ' 折叠为 'i' + U+0307 组合点），整段折叠后
+ * 直接 indexOf 的命中偏移会与原文错位，高亮到错误的文字上。
+ * 逐字符折叠并记录「折叠串下标 → 原文下标」映射；无膨胀时 map 为 null
+ * （恒等映射，零分配快路径）。末位哨兵映射到原文长度。
+ */
+function foldWithOffsets(text: string): { folded: string; map: number[] | null } {
+  let folded = ''
+  let map: number[] | null = null
+  for (let i = 0; i < text.length; i += 1) {
+    const lower = text.charAt(i).toLowerCase()
+    if (lower.length !== 1 && map === null) {
+      // 首次遇到折叠膨胀：为此前的恒等区段补建映射，切换显式模式。
+      map = []
+      for (let k = 0; k < folded.length; k += 1) map.push(k)
+    }
+    if (map !== null) {
+      for (let j = 0; j < lower.length; j += 1) map.push(i)
+    }
+    folded += lower
+  }
+  if (map !== null) map.push(text.length)
+  return { folded, map }
+}
+
+/**
  * 在作用域全部文本节点中定位查询串的每个出现，按文档顺序返回 range。
  * @param scope 对话滚动视口。
  * @param query 原始查询（已 trim、非空）。
@@ -132,17 +158,24 @@ export function findMatches(
 
   for (const node of collectTextNodes(scope)) {
     const text = node.data
-    const hay = options.caseSensitive ? text : text.toLowerCase()
-    let idx = hay.indexOf(needle)
+    // 大小写不敏感路径经折叠映射还原偏移；命中可能整体落在一个膨胀
+    // 字符内（折叠前后的边界不等价），此时至少覆盖一个原文字符，
+    // 保证高亮可见而非零宽。
+    const { folded, map } = options.caseSensitive
+      ? { folded: text, map: null as number[] | null }
+      : foldWithOffsets(text)
+    let idx = folded.indexOf(needle)
     while (idx !== -1) {
       const end = idx + needle.length
-      if (!options.wholeWord || wholeWordOk(hay, idx, end, needle)) {
+      const start0 = map !== null ? map[idx]! : idx
+      const end0 = Math.max(map !== null ? map[end]! : end, start0 + 1)
+      if (!options.wholeWord || wholeWordOk(folded, idx, end, needle)) {
         const range = document.createRange()
-        range.setStart(node, idx)
-        range.setEnd(node, end)
+        range.setStart(node, start0)
+        range.setEnd(node, Math.min(end0, text.length))
         matches.push({ range })
       }
-      idx = hay.indexOf(needle, end)
+      idx = folded.indexOf(needle, end)
     }
   }
   return { matches, total: matches.length }

@@ -62,9 +62,19 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
   const [savingTemplate, setSavingTemplate] = useState(false)
   const [importing, setImporting] = useState(false)
   const [deletingName, setDeletingName] = useState<string | null>(null)
+  /** 重试令牌：手动重试经此并入生成 effect，复用其取消守卫（杜绝并发竞态）。 */
+  const [retryToken, setRetryToken] = useState(0)
 
   /** 脏标记：用户一旦手动编辑过摘要，后续（慢）生成结果返回时不再覆盖内容。 */
   const dirtyRef = useRef(false)
+  /** 挂载守卫：卸载后的异步回调不再触碰状态。 */
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   /** 调用服务端为指定会话生成交接摘要。
    *
@@ -94,33 +104,45 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     [],
   )
 
-  /** 拉取模板列表。 */
+  /** 拉取模板列表（带挂载守卫，卸载/重开后过期响应不回写）。 */
   const loadTemplates = useCallback(async (): Promise<void> => {
+    const request = ++templatesRequestRef.current
     setTemplatesLoading(true)
     setTemplatesError('')
     try {
       const response = await fetchHandoffTemplates()
+      if (!mountedRef.current || request !== templatesRequestRef.current) return
       setTemplates(response.templates)
     } catch (error) {
+      if (!mountedRef.current || request !== templatesRequestRef.current) return
       setTemplatesError(error instanceof Error ? error.message : '模板列表加载失败')
     } finally {
-      setTemplatesLoading(false)
+      if (mountedRef.current && request === templatesRequestRef.current) setTemplatesLoading(false)
     }
   }, [])
 
+  /** 模板列表请求序号：仅最新一次请求允许回写（防乱序覆盖）。 */
+  const templatesRequestRef = useRef(0)
+
   /** 拉取历史会话列表（会话选择面板数据源；复用模块 A 的 /export/sessions）。 */
   const loadSessions = useCallback(async (): Promise<void> => {
+    const request = ++sessionsRequestRef.current
     setSessionsLoading(true)
     setSessionsError('')
     try {
       const response = await fetchExportSessions()
+      if (!mountedRef.current || request !== sessionsRequestRef.current) return
       setSessions(response.sessions)
     } catch (error) {
+      if (!mountedRef.current || request !== sessionsRequestRef.current) return
       setSessionsError(error instanceof Error ? error.message : '会话列表加载失败')
     } finally {
-      setSessionsLoading(false)
+      if (mountedRef.current && request === sessionsRequestRef.current) setSessionsLoading(false)
     }
   }, [])
+
+  /** 会话列表请求序号：仅最新一次请求允许回写（防乱序覆盖）。 */
+  const sessionsRequestRef = useRef(0)
 
   /** 会话筛选结果：按标题或会话 ID 子串匹配（大小写不敏感）。 */
   const filteredSessions = useMemo(() => {
@@ -143,10 +165,11 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     void loadSessions()
   }, [props.open, sessionId, loadTemplates, loadSessions])
 
-  // 选中会话变化时自动生成交接摘要（打开时的默认选中同样经此触发）。
-  // 摘要生成可能较慢：以 AbortController + cancelled 守卫，卸载 / 切换选中时
-  // 取消在途请求，避免过期响应覆盖新选中会话的状态；每次切换重置脏标记
-  // （切换即表明用户想要新会话的摘要，编辑中的旧内容不再保留）。
+  // 选中会话变化时自动生成交接摘要（打开时的默认选中同样经此触发；
+  // 手动重试经 retryToken 并入本 effect，复用同一套取消守卫）。
+  // 摘要生成可能较慢：以 AbortController + cancelled 守卫，卸载 / 切换选中 /
+  // 重试时取消在途请求，避免过期响应覆盖新选中会话的状态；每次切换重置
+  // 脏标记（切换即表明用户想要新会话的摘要，编辑中的旧内容不再保留）。
   useEffect(() => {
     if (!props.open || !selectedSessionId) return
     const controller = new AbortController()
@@ -157,7 +180,7 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
       cancelled = true
       controller.abort()
     }
-  }, [props.open, selectedSessionId, generate])
+  }, [props.open, selectedSessionId, generate, retryToken])
 
   /** 选中某个会话（单选）：点击已选中项不重复触发生成。 */
   const selectSession = useCallback(
@@ -311,8 +334,12 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
                       className={checked ? styles.sessionItemSelected : styles.sessionItem}
                       onClick={() => selectSession(session.id)}
                       onKeyDown={(event) => {
-                        // Enter / Space 与点击等价（键盘可达性）
-                        if (event.key === 'Enter' || event.key === ' ') selectSession(session.id)
+                        // Enter / Space 与点击等价（键盘可达性）；
+                        // Space 需阻止默认行为，否则会同时触发页面滚动。
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          selectSession(session.id)
+                        }
                       }}
                     >
                       <span className={checked ? styles.radioOn : styles.radioOff} aria-hidden="true" />
@@ -345,9 +372,12 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    // 手动重试 = 用户明确要求重新生成：重置脏标记允许结果覆盖
+                    // 手动重试 = 用户明确要求重新生成：经 retryToken 并入生成
+                    // effect（自带取消守卫，先取消在途请求再发起新请求），
+                    // 并重置脏标记允许结果覆盖。绝不裸调 generate：那会绕过
+                    // 守卫，在途旧响应可能晚到并覆盖切换后新会话的摘要。
                     dirtyRef.current = false
-                    void generate(selectedSessionId)
+                    setRetryToken((token) => token + 1)
                   }}
                 >
                   重试

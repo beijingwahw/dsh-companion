@@ -103,8 +103,11 @@ export function apply(ctx: Context): void {
                   index += 1
                 }
                 return { kind: 'success', text: lines.join('\n') }
-              } catch {
-                return { kind: 'error', text: '检索失败，请稍后重试' }
+              } catch (error) {
+                // 吞错可观测化：先发通知（dock/日志可见），不再无声消失；
+                // HttpError 的消息用户可读，原样回显，其余不泄漏内部细节。
+                notifySwallowedError(ctx, error, '检索失败')
+                return { kind: 'error', text: commandErrorText(error, '检索失败，请稍后重试') }
               }
             },
           }),
@@ -143,8 +146,10 @@ export function apply(ctx: Context): void {
                     ? `会话 ${sessionId} 的标签已更新：${tags.join('、')}`
                     : `会话 ${sessionId} 的标签已清空`
                 return { kind: 'success', text }
-              } catch {
-                return { kind: 'error', text: '更新标签失败，请稍后重试' }
+              } catch (error) {
+                // 与 search 命令同一策略：通知可观测 + 用户可读文本。
+                notifySwallowedError(ctx, error, '更新标签失败')
+                return { kind: 'error', text: commandErrorText(error, '更新标签失败，请稍后重试') }
               }
             },
           }),
@@ -212,6 +217,10 @@ function parseSearchParams(query: URLSearchParams): SearchParams {
     }
     params.limit = parsed
   }
+  // 时间范围健全性：倒置区间直接 400（否则静默空结果，用户无从排查）。
+  if (params.from !== undefined && params.to !== undefined && params.from > params.to) {
+    throw new HttpError('from 不能晚于 to')
+  }
   return params
 }
 
@@ -254,4 +263,18 @@ function parseTagList(value: unknown, field: string): string[] | undefined {
 function toSafeHttpError(error: unknown, fallbackMessage: string): HttpError {
   if (error instanceof HttpError) return error
   return new HttpError(fallbackMessage, 500)
+}
+
+/**
+ * 命令路径吞错可观测化：捕获后先发 companion 通知（dock/日志可见），
+ * 底层原因不再无声消失；通知内容含原始错误消息以便排查。
+ */
+function notifySwallowedError(ctx: Context, error: unknown, summary: string): void {
+  const detail = error instanceof Error ? error.message : String(error)
+  ctx.companion.notice('warning', `${summary}（原因：${detail}）`)
+}
+
+/** 命令路径的用户可读错误文本：HttpError 原样，其余回退通用文案。 */
+function commandErrorText(error: unknown, fallback: string): string {
+  return error instanceof HttpError ? error.message : fallback
 }

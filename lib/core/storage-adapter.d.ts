@@ -6,7 +6,8 @@
  * - 表名：插件使用连字符（如 'usage-daily'），真实 API 要求 UNIT_NAME_RE（仅小写字母/数字/下划线）
  * - keys()/entries()：插件期望数组，真实 API 返回迭代器
  * - delete()：插件期望 Promise<void>，真实 API 返回 Promise<boolean>
- * - update()：插件回调返回 V|undefined（undefined=删除），真实 API 回调返回 V（键不存在则抛错）
+ * - update()：插件回调为原子读改写 `(prev: V|undefined) => V|undefined`（undefined=删除），
+ *   真实 API 回调只接受 `(prev: V) => V` 且键不存在时抛错——经同键写串行化队列适配（见下）
  * - Domain.global：插件期望 KvTable，真实 API 是 DomainGlobal<G>
  * - defineDomain：插件仅传 name/version，真实 API 要求声明所有表及 zod schema
  *

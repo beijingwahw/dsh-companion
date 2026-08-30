@@ -114,11 +114,22 @@ export class ArmedStore {
    * 消费 pending 武装：删除并返回摘要；不存在返回 undefined。
    * 用一次 table.update 原子地读取并删除（回调返回 undefined 即删除该键），
    * 避免 get→await delete 的间隙中新武装的摘要被误删。
+   * @param expect 身份校验（armedAt + summary）：记录在 peek 与消费之间
+   * 被新武装覆盖时不误删新记录（返回 undefined，新记录留给后续装配投递）。
    */
-  async consumePending(): Promise<string | undefined> {
+  async consumePending(expect?: { armedAt: number; summary: string }): Promise<string | undefined> {
     let summary: string | undefined
     await this.table.update(PENDING_KEY, (prev) => {
-      summary = prev?.summary
+      if (prev === undefined) return undefined
+      if (
+        expect !== undefined &&
+        (prev.armedAt !== expect.armedAt || prev.summary !== expect.summary)
+      ) {
+        // 记录已被新的武装覆盖：保留新记录，本次不消费。
+        summary = undefined
+        return prev
+      }
+      summary = prev.summary
       return undefined
     })
     return summary

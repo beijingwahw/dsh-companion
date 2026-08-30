@@ -5,6 +5,14 @@
  * （docs/subsystems/web-server.md），各功能模块通过
  * `ctx.companion.http.add(method, path, handler)` 挂载自己的端点；
  * 浏览器侧客户端（src/client）通过同源 fetch 调用这些端点。
+ *
+ * CSRF / DNS-rebinding 防线（createRouter.handle 内实施）：
+ * 变更类方法（POST/DELETE）若携带 Origin 或 Referer 头，则必须与请求
+ * Host 同源（主机名+端口一致）。浏览器对跨站表单 POST 与 no-cors fetch
+ * 同样会发送 Origin，攻击页伪造的 Origin/Referer 与本机 Host 不符即被
+ * 403 拒绝；DNS rebinding 下 Origin 是攻击者域名，同样被拒。两个头
+ * 均缺失（curl 等非浏览器客户端）放行——本服务无 Cookie/会话，非
+ * 浏览器客户端不受 CSRF 模型威胁，不设虚假防线。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 export interface HttpRequestContext {

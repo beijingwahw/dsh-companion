@@ -10,28 +10,34 @@ export interface RedactionStats {
   bankCard: number
 }
 
-/** 中国大陆手机号：保留前 3 位与后 4 位。 */
-const PHONE_RE = /\b(1[3-9]\d)\d{4}(\d{4})\b/g
-/** 邮箱：本地部分仅保留首字符。 */
-const EMAIL_RE = /\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g
+/** 中国大陆手机号：保留前 3 位与后 4 位。可选国家码前缀（86 / +86 / 086）。 */
+const PHONE_RE = /(?<!\d)(\+?0?86[\s-]?)?(1[3-9]\d)\d{4}(\d{4})(?!\d)/g
+/** 15 位老式身份证号（无校验位）：保留前 6 位与后 3 位。 */
+const OLD_ID_CARD_RE = /(?<!\d)(\d{6})\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}(?!\d)/g
+/** 邮箱：本地部分仅保留首字符。结尾允许数字等非字母字符（如 foo@bar.com1 仍命中）。 */
+const EMAIL_RE = /\b([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![A-Za-z])/g
 /**
  * 18 位身份证号：保留前 6 位与后 4 位。
  * 生日段要求合法（月 01-12、日 01-31），避免 18 位银行卡号被误判为身份证。
  */
-const ID_CARD_RE = /\b(\d{6})\d{4}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(\d{3}[\dXx])\b/g
+const ID_CARD_RE = /(?<!\d)(\d{6})\d{4}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(\d{3}[\dXx])(?!\d)/g
 /** 16-19 位银行卡号：保留前 4 位与后 4 位。 */
-const BANK_CARD_RE = /\b(\d{4})\d{8,12}(\d{4})\b/g
+const BANK_CARD_RE = /(?<!\d)(\d{4})\d{8,12}(\d{4})(?!\d)/g
+
+/** 合并后仍能被某条规则命中的位宽（手机号 11、身份证 15/18、银行卡 16-19）。 */
+const MERGEABLE_WIDTHS = new Set([11, 15, 16, 17, 18, 19])
 
 /**
  * 数字段分隔符归一化：去掉数字之间的空格与连字符，
  * 使 `138-1234-5678`、`6222 0202 0000 1234` 这类分组写法可被识别。
- * 仅处理 11–19 位的数字段（手机号/身份证/银行卡的位宽区间），
- * 避免误伤日期（如 2024-01-01）等无关数字文本。
+ * 仅当合并后的位宽恰好命中某条规则的位宽时才合并；落在 12-14 位
+ * 空窗区的分段保持原样——既避免把 `+86 13812345678` 粘合成无法
+ * 匹配的 13 位长串（反而泄露手机号），也不破坏日期加短编号等文本。
  */
 function normalizeDigitSeparators(text: string): string {
   return text.replace(/\d(?:[\s-]*\d)+/g, (run) => {
     const digitCount = run.replace(/\D/g, '').length
-    if (digitCount < 11 || digitCount > 19) return run
+    if (!MERGEABLE_WIDTHS.has(digitCount)) return run
     return run.replace(/[\s-]+/g, '')
   })
 }
@@ -47,7 +53,9 @@ export function redactText(text: string): { text: string; stats: RedactionStats 
   // 匹配前先归一化数字分隔符（空格/连字符），覆盖分组书写的号码。
   const normalized = normalizeDigitSeparators(text)
 
-  // 顺序敏感：先 18 位身份证，再 16-19 位银行卡，避免长数字串被误判。
+  // 顺序敏感：先 18 位身份证，再 15 位老身份证，再 16-19 位银行卡，
+  // 避免长数字串被误判；邮箱先于手机号，防止邮箱本地部分中的手机号
+  // 被二次打码造成重复计数。
   let result = normalized.replace(
     ID_CARD_RE,
     (_m, head: string, _month: string, _day: string, tail: string) => {
@@ -55,17 +63,21 @@ export function redactText(text: string): { text: string; stats: RedactionStats 
       return `${head}********${tail}`
     },
   )
+  result = result.replace(OLD_ID_CARD_RE, (_m, head: string, _month: string, _day: string, tail: string) => {
+    stats.idCard += 1
+    return `${head}********${tail}`
+  })
   result = result.replace(BANK_CARD_RE, (_m, head: string, tail: string) => {
     stats.bankCard += 1
     return `${head} **** **** ${tail}`
   })
-  result = result.replace(PHONE_RE, (_m, head: string, tail: string) => {
-    stats.phone += 1
-    return `${head}****${tail}`
-  })
   result = result.replace(EMAIL_RE, (_m, head: string, domain: string) => {
     stats.email += 1
     return `${head}***@${domain}`
+  })
+  result = result.replace(PHONE_RE, (_m, prefix: string | undefined, head: string, tail: string) => {
+    stats.phone += 1
+    return `${prefix ?? ''}${head}****${tail}`
   })
   return { text: result, stats }
 }
