@@ -1,0 +1,371 @@
+/* 认知面板样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.stats {
+  flex: 1;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.divider {
+  height: 1px;
+  background: var(--dsw-alias-border-default, #dee0e3);
+}
+
+.error {
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* —— 前瞻记忆（轴线 20）—— */
+
+.intentionList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.intentionItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.intentionItem:hover {
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.intentionText {
+  flex: 1;
+  font-size: 13px;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overdueBadge {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.overdueCritical {
+  color: var(--dsw-alias-danger-default, #f54a45);
+  font-weight: 600;
+}
+
+.upcoming {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* —— 间隔重复（轴线 21）—— */
+
+.reviewList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.reviewProblem {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.reviewSolution {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  padding: 6px 8px;
+  border-left: 2px solid var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.gradeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reviewMeta {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* —— 类比检索（轴线 22）—— */
+
+.analogyRow {
+  display: flex;
+  gap: 6px;
+}
+
+.analogyInput {
+  flex: 1;
+}
+
+.analogySummary {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.analogyList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.analogyCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.analogyCard:hover {
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.analogyHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analogyBadgeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.analogyScore {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.analogyTitle {
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.crossDomainPill {
+  font-size: 11px;
+  color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+  font-weight: 600;
+}
+
+.sameDomainPill {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.sharedRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sharedPill {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.analogyProblem {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.analogySolution {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* —— 元认知三轴（轴线 23/24/25）—— */
+
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rhythmMark {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.overloadPill {
+  font-size: 11px;
+  color: var(--dsw-alias-warning-default, #ff8800);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+  font-weight: 600;
+}
+
+.planSummary {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.forecastList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.forecastItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.forecastItem:hover {
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.forecastProblem {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.retentionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.retentionTrack {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.bar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
+.barStable {
+  background: var(--dsw-alias-success-default, #00b42a);
+}
+
+.barWarning {
+  background: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.barCritical {
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.retentionText {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.forecastEta {
+  font-size: 11px;
+  color: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.triageRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.retentionMini {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-warning-default, #ff8800);
+  font-weight: 600;
+}
+
+.triageReason {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}

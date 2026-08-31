@@ -1,5 +1,5 @@
 /**
- * 插件根配置：四个功能模块可独立启停，互不影响。
+ * 插件根配置：七个功能模块可独立启停，互不影响。
  * 配置经 schemastery 校验后传入 apply；cordis.patch.yml 可覆盖任一字段。
  */
 import Schema from '@deepseek-ai/schemastery'
@@ -13,6 +13,12 @@ export interface Config {
   enableCost: boolean
   /** 模块 D：全局对话检索。 */
   enableSearch: boolean
+  /** 模块 E：本地语义检索（混合排序）。 */
+  enableRetrieval: boolean
+  /** 模块 F：对话知识资产（实体抽取 + 标签建议 + 关联会话）。 */
+  enableKnowledge: boolean
+  /** 模块 G：跨会话知识合成（Deep Research）。 */
+  enableSynthesis: boolean
   /** DeepSeek 官方 API 基址（manifest.json 已放行该域名）。 */
   apiBaseUrl: string
   /** 单次 API 调用超时（毫秒）。 */
@@ -28,6 +34,9 @@ export const Config: Schema<Config> = Schema.object({
   enableHandoff: Schema.boolean().default(true),
   enableCost: Schema.boolean().default(true),
   enableSearch: Schema.boolean().default(true),
+  enableRetrieval: Schema.boolean().default(true),
+  enableKnowledge: Schema.boolean().default(true),
+  enableSynthesis: Schema.boolean().default(true),
   // URL 格式校验：role('url') 提供表单渲染提示，pattern 强制 http(s):// 前缀
   // （schemastery 实际支持 role/pattern，见其类型声明）。
   apiBaseUrl: Schema.string()

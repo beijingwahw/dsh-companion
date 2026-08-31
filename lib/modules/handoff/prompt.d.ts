@@ -20,3 +20,24 @@ export declare function buildHandoffPrompt(conversationContent: string): string;
  * @param conversationContent 格式化后的对话转录文本。
  */
 export declare function buildHandoffPromptWithTemplate(template: string, conversationContent: string): string;
+/**
+ * 构造带查询聚焦的完整提示词（轴线 2：单发路径的 focus 支持）。
+ * @param conversationContent 格式化后的对话转录文本。
+ * @param focus 可选的聚焦重点（保留与该主题相关的内容）。
+ */
+export declare function buildHandoffPromptWithFocus(conversationContent: string, focus: string | undefined): string;
+/**
+ * 构造 map 阶段提示词（轴线 2：超长对话分块抽取式摘要）。
+ * 每块生成 ≤200 字要点摘要，供 reduce 阶段合并。
+ * @param chunkContent 分块后的对话片段文本。
+ * @param positionHint 位置提示（如「第 2/7 段（约 25% 处）」）。
+ * @param focus 可选的聚焦重点。
+ */
+export declare function buildMapPrompt(chunkContent: string, positionHint: string, focus: string | undefined): string;
+/**
+ * 构造 reduce 阶段提示词（轴线 2：合并各块要点为最终交接摘要）。
+ * @param chunkSummaries 各块要点摘要（已按顺序编号拼接）。
+ * @param focus 可选的聚焦重点。
+ * @param templateInstruction 可选的自定义摘要指令（替代固定四段契约）。
+ */
+export declare function buildReducePrompt(chunkSummaries: string, focus: string | undefined, templateInstruction?: string): string;

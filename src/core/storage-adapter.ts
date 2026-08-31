@@ -78,10 +78,19 @@ const ALL_TABLE_NAMES = [
   'vault-meta', 'vault', 'usage-daily',
   // handoff
   'templates', 'handoff-armed', 'handoff-receipts',
+  'handoff-chunks', 'handoff-lineage',
   // cost
   'cost-extra', 'budget-state',
   // search
   'tags',
+  // retrieval
+  'retrieval-index',
+  // retrieval（轴线 11：点击反馈画像）
+  'retrieval-feedback',
+  // retrieval（轴线 19：零命中查询日志——检索盲区分析的原料）
+  'retrieval-misses',
+  // knowledge（轴线 4：对话知识资产实体倒排索引）
+  'knowledge-entities',
   // trace
   'traces', 'trace-stats-daily',
   // prompt

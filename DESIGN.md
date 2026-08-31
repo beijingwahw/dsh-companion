@@ -51,6 +51,8 @@ interface CallParams {
 | `core/price/scrapers.js` | `parseVendorSheet`, `parseErnieSheet`, `parseZhipuBundleSheet`, `parseDoubaoSheet`, `parseKimiSheet` |
 | `core/price/service.js` | `PriceService`, `BUILTIN_SHEET`, `OFFICIAL_PRICING_URL`, `DEFAULT_PEAK_WINDOWS`, `resolvePrice`, `isPeakTimeAt`, `costOf`, `parsePriceSheet`, `sanitizePriceSheet`, `fetchText` |
 | `core/usage.js` | `UsageStore`, `DailyUsage`（含 cacheHitTokens）, `UsageTotal` |
+| `core/retrieval/engine.js` | `HybridRetrievalIndex`（BM25 + trigram 向量 + RRF 融合）, `buildIndexedDoc`, `sanitizeIndexedDoc`, `buildSnippet`, `IndexedDoc`, `HybridHit` |
+| `core/retrieval/tokenize.js` | `tokenize`（词法分词）, `charTrigrams`（字符三元组计数）, `fnv1a32`（FNV-1a 哈希） |
 | `core/http.js` | `createRouter`, `sendJson`, `readJsonBody`, `HttpError`, `HttpHandler` |
 | `core/vault.js` | `SecretVault` |
 | `core/ids.js` | `SessionId`, `CredentialRef`, `ScopeKey`（类型 + 构造器） |
@@ -110,18 +112,30 @@ export function apply(ctx: Context): void {
   单会话读取失败跳过（404 文案含会话 id），系统性错误上抛 `500`。
 
 ### 模块 B（handoff）
-- `POST /handoff/generate` `{ sessionId, template? }` → `{ summary, model }`
+- `POST /handoff/generate` `{ sessionId, template?, focus? }` → `{ summary, model, stats? }`
   `template` 可选：指定且存在时以该模板为摘要指令文本（支持 `{conversation_content}` 占位符，
   缺占位符则模板后追加"对话内容："段）；未指定/不存在回退固定契约 Prompt。
-  转录按 `TRANSCRIPT_CHAR_BUDGET`（60000）截断（保首尾、中段附提示行）。
+  `focus` 可选（轴线 2）：查询聚焦主题（≤ `FOCUS_MAX_CHARS` 字符），摘要定向保留相关内容。
+  转录在 `TRANSCRIPT_CHAR_BUDGET`（60000）内：单发路径；
+  超预算：map-reduce 分层摘要（分块抽取 → 段级缓存复用 → 递归归并，不再丢弃中段），
+  响应附 `stats`（层数 / 分块数 / 缓存命中数 / LLM 调用数）。
 - `GET  /handoff/templates` → `{ templates: [{ name, content, updatedAt }] }`
 - `POST /handoff/templates` `{ name, content }` → `{ ok: true }`
 - `DELETE /handoff/templates` `{ name }` → `{ ok: true }`
-- `POST /handoff/import` `{ summary, sessionId? }` → `{ ok: true, sessionId: string | null }`
-  （无 sessionId = 武装给"下一个新对话"；pending 武装携带世代快照与 24h 有效期，见第 8 节）
+- `POST /handoff/import` `{ summary, sessionId?, sourceSessionId? }` → `{ ok: true, sessionId: string | null }`
+  （无 sessionId = 武装给"下一个新对话"；pending 武装携带世代快照与 24h 有效期，见第 8 节；
+  `sourceSessionId` 可选（轴线 2）：摘要来源会话，记录继承图谱边——pending 悬边待投递解析）
+- `GET  /handoff/lineage?sessionId=` → `{ ancestors: LineageNode[], descendants: LineageNode[] }`
+  `LineageNode = { sessionId, depth, excerpt, linkedAt }`（depth 自 1 起算，excerpt 为传播所用摘要首行摘录）。
+  上下文血缘图谱（轴线 2）：摘要跨会话传播链路的祖先/后代，环安全遍历、近源优先。
 - `GET  /handoff/armed` → `{ armed: [{ sessionId: string | null, summary, armedAt }], receipts: [{ sessionId, injectedAt }] }`
   `receipts` 为 pending 摘要的投递回执（按注入时间降序，滚动保留最近 20 条）。
 - `DELETE /handoff/armed` `{ sessionId? }` → `{ ok: true }`
+- `GET  /handoff/context-health?sessionId=` → `{ sessionId, turns, estimatedTokens, windowTokens, ratio, avgTurnTokens, remainingTurns, level, suggestion }`
+  上下文压力监测（轴线 6）：token 估算（CJK×0.6 + 其余÷4 启发式，含每回合固定开销 6 token，
+  窗口 65536、输出预留 4096）、耗尽预测（近 10 回合平均增速外推 `remainingTurns`，
+  不足 2 回合返回 null）、四级健康分级 `level`（healthy <50% / watch ≥50% / advice ≥75% /
+  critical ≥90%）与交接建议文案。`sessionId` 必填（空串 `400`）。
 
 ### 模块 C（cost）
 - `GET    /cost/state` → `{ devMode, apiKeyConfigured, peakScheduling, modelRouting, budget: { dailyCny, dailySpentCny, dailyRatio, monthlyCny, spentCny, ratio, paused, reservedCny }, rules, pricing }`
@@ -141,6 +155,18 @@ export function apply(ctx: Context): void {
   峰谷分时计划、用户自定义单价覆盖、按厂商分组的全部已知定价。
 - `POST   /cost/pricing/refresh` → 同 `GET /cost/pricing`（手动触发官方定价页刷新：
   DeepSeek + 全部国产厂商）。
+- `GET    /cost/forecast?days=30&horizon=7` → `{ points: [{ day, forecastCny }], monthEndProjectionCny?, ... }`
+  预测性成本智能（轴线 3）：OLS 线性回归外推未来 `horizon` 天支出 + 月末投影。
+  `days` ∈ [1, 365]（回看窗口），`horizon` ∈ [1, 30]；非法参数 `400`。
+- `GET    /cost/anomalies?days=30` → `{ anomalies: [{ day, spendCny, zScore, ... }], baseline, mad }`
+  异常检测：中位数 + MAD 鲁棒 z 分数（|z| > 3 判异常），对离群日与新装用户冷启动稳健。
+- `POST   /cost/what-if` `{ days?, callVolumeFactor?, cacheHitRatio?, modelShift? }` → what-if 模拟结果
+  场景沙盘：`callVolumeFactor` ∈ (0, 100]（调用量倍数）、`cacheHitRatio` ∈ [0, 1]
+  （缓存命中率）、`modelShift`（模型迁移，如 `{ from: 'deepseek-chat', to: 'deepseek-reasoner' }`）；
+  单价按计价引擎实时解析（峰谷感知）。任一参数非法 → `400`。
+- `GET    /cost/attribution?days=7` → 按模型分解的费用变化（当前窗口 vs 上一等长窗口）
+  变化归因：定位"这个月多花的钱去哪了"（各模型用量/单价贡献分解）。
+  `days` ∈ [1, 90]。
 
 ### 模块 D（search）
 - `GET  /search?query=&from=&to=&tags=a,b&limit=50` → `{ hits: [{ session, snippet?, tags }] }`
@@ -148,6 +174,123 @@ export function apply(ctx: Context): void {
   有 `tags` 时向引擎取 `min(limit*10, 1000)` 候选再本地全命中过滤，避免引擎提前截断漏命中。
 - `GET  /tags?sessionId=` → `{ tags: string[] }`（缺省返回 `{ tags: Record<string, string[]> }`）
 - `POST /tags` `{ sessionId, add?, remove? }` → `{ tags: string[] }`
+
+### 模块 E（retrieval）
+- `GET  /retrieval/search?query=&from=&to=&limit=50` → `{ hits: [{ session, snippet?, score, lexicalRank?, semanticRank? }] }`
+  纯本地混合检索（轴线 1）：BM25 词法 + 字符 trigram 哈希向量语义近似 + RRF 倒数排名融合。
+  `query` 必填（空串 `400`）；`from`/`to` 支持毫秒时间戳或 `YYYY-MM-DD`（北京时间，
+  from 取当日零点、to 取当日末尾），历法非法或 `from > to` → `400`；`limit` 封顶 200。
+  `snippet` 仅头部命中（前 12 条）生成（读取原文定位最佳查询窗口，控制检索延迟）。
+- `GET  /retrieval/status` → `{ indexed, lastSyncAt }`（索引规模与最近对账时间）
+- `POST /retrieval/reindex` → `{ ok: true, indexed, updated, removed }`（强制全量对账重建）
+- `GET  /retrieval/suggest?q=` → `{ suggestions: RetrievalSuggestion[] }`
+  查询建议（轴线 14）：语料前缀补全 + 共现续写 + 点击画像加权；空 `q` 合法（返回空数组，
+  输入框每键一请求）。
+- `POST /retrieval/feedback` `{ query, sessionId }` → `{ ok: true, clicks }`
+  相关性反馈学习（轴线 11）：查询词并入该会话点击画像（饱和计数 + 90 天半衰 + 35% 加成封顶）；
+  `sessionId` 不在索引中 → `404`。
+- `GET  /retrieval/clusters?minSize=1` → 知识地图（轴线 13）：全部会话质心贪心聚类的主题簇
+  （簇标签 / 成员数 / 代表会话）；`minSize` 正整数，非法 `400`。
+- `GET  /retrieval/blindspots` → `{ totalMisses, blindSpots: [{ anchor, searches, queries[], lastAt, score, advice }], summary }`
+  检索盲区分析（轴线 19）：零命中（且救援失败）查询的词元级聚合——评分 =
+  搜索次数 × log(1 + 首末停留天数) × 新近度（90 天半衰），孤例（< 2 次）不推送。
+- `GET  /retrieval/insights` → `{ cards: [{ category, severity, text, action?, source }], summary, generatedAt }`
+  主动脉搏（轴线 18）：主动洞察引擎——信号提供者注入式聚合盲区缺口 / 反馈学习画像 /
+  索引健康三类信号源，severity（critical/watch/info）排序、封顶 6 条、单源失败静默隔离。
+
+### 模块 F（knowledge）
+- `GET  /knowledge/status` → `{ sessions, entities, updated, removed, lastSyncAt }`
+  实体倒排索引状态（已分析会话数 / 实体总数 / 最近对账增删量）。
+- `GET  /knowledge/entities?type=&limit=50` → `{ entities: [{ name, type, sessionCount, totalFreq, sampleSessions }] }`
+  全局实体图谱（按覆盖会话数降序）。`type` ∈ 六类实体之一（command/path/tech/code/term/version，
+  非法值 `400`）；`limit` 封顶 200。
+- `GET  /knowledge/analyze?sessionId=` → `{ sessionId, analyzed, entities, suggestedTags }`
+  单会话知识资产：实体列表（按显著性 = freq × 类型权重 × IDF 降序，含全局覆盖数）
+  与建议标签（头部实体名，仅建议不写入——尊重现有标签系统与用户判断）。
+  `sessionId` 必填（空串 `400`）。
+- `GET  /knowledge/related?sessionId=&limit=5` → `{ sessionId, related: [{ sessionId, title?, createdAt, score, sharedEntities }] }`
+  关联会话推荐：实体重叠 + IDF 加权 + 余弦式归一（除以两会话实体集规模的几何平均），
+  `sharedEntities` 为贡献最大的共享实体（最多 5 个）。`limit` 封顶 20。
+- `POST /knowledge/reanalyze` → `{ ok: true, sessions, entities, updated, removed }`
+  强制全量重建索引（清空版本与实体记录后重新分析全部会话）。
+- `GET  /knowledge/trends?days=14&limit=12` → `{ days, generatedAt, trends: [{ name, type, direction, momentum, recentSessions, previousSessions, recentFreq, previousFreq, series }] }`
+  主题趋势演化（轴线 7）：实体动量 =（近 `days` 天频次 − 上一等长窗口频次）/（上一窗口频次 + 1），
+  方向判定 rising（momentum > 0.5 且近窗口 ≥2 会话）/ falling（上一窗口 ≥2 会话且（近窗口为 0 或
+  momentum < −0.6））/ stable（其余）；`series` 为最近 8 周逐周覆盖会话数（旧→新）。
+  排序键 |momentum| × log(1 + 总频次)（小样本噪声抑制）。
+  `days` ∈ [1, 90]（默认 14），`limit` ∈ [1, 50]（默认 12）；非法参数 `400`。
+- `GET  /knowledge/cognition` → `{ intentions: { due, upcoming }, reviews: DueReview[], plan?, forecast?, rhythm?, stats }`
+  认知总览（认知三轴 + 元认知三轴，单次请求驱动客户端认知面板）：到期/即将到来的前瞻意图、
+  到期复习卡片与认知统计；`plan`（轴线 25 负荷计划）、`forecast`（轴线 23 遗忘预测报告）、
+  `rhythm`（轴线 24 节律摘要）为元认知扩展字段（旧客户端可忽略）。
+- `GET  /knowledge/intentions` → `{ due, upcoming }`（完整意图清单：到期 30 条 + 即将到来 15 条）
+  前瞻记忆引擎（轴线 20）：句子级扫描提取未兑现意图——时间标记（明天=1 天/后天=2/周末=5/
+  下周=7/下个月=30，模糊标记 回头/以后/有空 取 7 天缺省视界）× 意图动词（试试/优化/修复/
+  部署…）共现；独立 TODO 标记（TODO/别忘了/记得要）无需动词共现、取 1 天视界；问句排除
+  （「怎么修复？」是求助不是承诺）；到期即浮现（`createdAt + horizonDays ≤ now`），
+  超期越久排序越靠前。切分保留终结符（捕获组）以正确判定问句。
+- `POST /knowledge/review/grade` `{ episodeId, remembered }` → `{ ok: true, stage, nextDueAt, nextIntervalDays, ease }`
+  间隔重复巩固（轴线 21 + 24，SM2 精简版）：片段即复习卡片，间隔阶梯 1/3/7/14/30/60 天 ×
+  当前节律系数 ease（四舍五入、至少 1 天）——「记得」升档、「忘了」归零次日重来；新片段创建
+  1 天后首复习（先沉一晚）。评分同时计入节律闭环（轴线 24）：累计命中率偏离 85% 目标时
+  按比例调整 ease（∈ [0.5, 2.0]，样本不足 3 次不动系数），响应返回更新后的系数；
+  复习状态记录排程时的 ease，保证到期时间纯函数重算与排程一致。
+  `episodeId` 格式非法 `400`，不在片段索引中 `404`（可能已被重新分析）。
+- `GET  /knowledge/analogy?q=` → `{ queryShape, analogies: [{ episodeId, sessionId, title?, problem, solution, score, sharedConstraints, sharedResolutions, crossDomain, termOverlap, createdAt }], summary }`
+  类比检索（轴线 22）：把问题抽象为结构形状（约束类别 × 解法类别），做形状级匹配——
+  相似度 = 0.7 × 约束重叠系数 + 0.3 × 解法重叠系数（重叠系数 = 交集/较小集，
+  查询侧偶发约束不稀释同构判定）；主题词元重叠低 + 形状分高 → **跨域类比**
+  （领域不同而结构相同——主题检索永远找不到的先例），重叠高 → 同域先例。
+  `q` 必填且 ≤500 字符；查询识别不出结构时返回空结果 + 引导文案。
+- `GET  /knowledge/pulse` → `{ cards, summary, generatedAt }`
+  认知脉搏（轴线 18 的认知信号源）：到期意图（critical/watch）、到期复习、片段资产
+  （空库/积累中/跨域就绪三态）、遗忘预测（critical/watch/info/静默四态）、记忆节律
+  （显著偏离才播报，冷启动静默）、认知负荷（仅顺延发生时开口）六类信号提供者，
+  与检索侧脉搏在客户端合并。
+- `GET  /knowledge/forecast` → `{ now, ease, critical: ForgettingForecast[], warning: ForgettingForecast[], criticalCount, warningCount, stableCount, summary }`
+  遗忘预测引擎（轴线 23）：为全库每条片段计算连续保持率 `R(t) = exp(-t/S)`——
+  稳定性 S = 档位间隔 × 当前节律 ease × 标定因子 `1/-ln(0.7)`（保证到期时刻的
+  预测保持率恰等于 70% 阈值，与轴线 21 调度数学自洽）；三档分区：≥70% 稳定 /
+  30–70% 滑落区（最佳巩固窗口）/ <30% 深度遗忘区；`warning` 按保持率升序
+  （最危险在前）、`critical` 按创建时间新→旧（最近丢失的最相关），每桶封顶 10 条；
+  `daysToThreshold` = S·ln(R/T)（距跌破阈值的剩余天数，负 = 已跌破）。
+  覆盖从未复习的片段（按会话创建时间起算）——旧知识的衰减无人看管问题在此解决；
+  预测用当前 ease 重算已按历史 ease 排程的日程 → 节律漂移预警（日程未到期，
+  记忆已滑落）。
+- `GET  /knowledge/rhythm` → `{ profile: { remembered, forgotten, ease, updatedAt }, summary, hitRate, targetHitRate, ladder: [{ stage, baseDays, adaptedDays }] }`
+  记忆节律画像（轴线 24）：闭环比例控制器以 85% 命中率（合意困难工作点）为目标——
+  `ease += (hitRate − 0.85) × 1.5`，收敛区间 [0.5, 2.0]，样本不足 3 次冷启动保护；
+  `ladder` 为投影间隔阶梯（标准档位 → 你的档位）；存储净化：计数非法整体丢弃，
+  ease 越界收敛修复。
+- `GET  /knowledge/load?cap=8` → `{ cap, totalDue, today: [{ review, retention, priority, reason }], deferredCount, health, summary }`
+  认知负荷调度（轴线 25）：到期复习分诊打分——优先级 = 紧迫度（距阈值下坠深度）×
+  救援权重（滑落区 1 / 深度遗忘 0.25）× 投资系数（1 + 巩固度）；排序后封顶
+  `cap` 条（缺省 8，∈ [1, 50]，非法 `400`），超出部分明确顺延；
+  `health`：clear（无到期）/ normal（容量内）/ overload（发生顺延）；
+  保持率查表来自轴线 23 的 `retentionIndex`，查不到按阈值中性处理。
+
+### 模块 G（synthesis）
+- `POST /synthesis/answer` `{ question }` → `{ answer, model, sources: [{ sessionId, title?, createdAt, snippet }], stats: { candidates, chunks, evidenceChunks, evidenceChars } }`
+  跨会话知识合成（轴线 5，Deep Research）：
+  - **召回**：FTS 关键词召回（`searchSessions`，24 个）+ 近期会话兜底（12 个），
+    按 id 去重合并、总数封顶 32（FTS 对长问句召回不稳，近期兜底保证覆盖；两通道各自容错）；
+  - **转录预算**：单会话截断至 `TRANSCRIPT_CHAR_BUDGET`（40000）字符——超长保首尾回合
+    （中段舍弃），与"首部背景 + 尾部最新结论"的信号分布对齐；
+  - **分块**：按回合边界贪心组块（`CHUNK_CHAR_TARGET` = 1800 字符/块，回合不跨块、
+    单回合超目标独立成块——引用边界可解释）；
+  - **打分**：词法命中率 + trigram 余弦双通道各 50%（`scoreText`，复用 core/retrieval 分词器）；
+  - **证据选择**：分数降序贪心装入（`MAX_EVIDENCE_CHUNKS` = 10 块）+ 单会话块数封顶
+    （`PER_SESSION_CHUNK_CAP` = 3，防垄断）+ 总字符预算（`EVIDENCE_CHAR_BUDGET` = 26000，
+    剩余 <200 字符提前收束，尾部块截断而非整块丢弃）；
+  - **合成**：契约式 Prompt（只用证据 + `[编号]` 引用 + 证据不足明示 + 结论先行 + 矛盾明示），
+    经成本网关（taskHint '研究' / priority 'high'，交互式不参与峰谷延迟）调用 DeepSeek，
+    `maxTokens` 1600；
+  - `question` ≤ `QUESTION_MAX_CHARS`（500）字符，违例 `400`；无相关证据 → `404` 可读文案。
+  `sources` 为去重后的证据会话（snippet 为块文本空白折叠后截断 160 字符）。
+  `evolution` 为知识演化追踪（轴线 17，纯本地零 LLM 开销）：证据块提取主题锚（技术专名）
+  + 版本号/数值声明，同锚不同值 → 演化事件 `{ anchor, kind: upgrade|downgrade|change,
+  from, to, fromAt, toAt, fromSession, toSession }`；语义化版本比较（v2.10 > v2.9，
+  数字段逐段）判定方向，事件按时间升序排成信念时间线（`{ events[], summary }`）。
 
 ## 5. 命令面板（ctx.commands）
 
@@ -160,6 +303,23 @@ export function apply(ctx: Context): void {
 | `usage` | C | 输出本月用量文本报告 |
 | `search` | D | 检索历史对话 |
 | `tag` | D | 为会话增删标签 |
+| `find` | E | 语义检索历史对话（混合排序，本地计算；input: `<检索词>`） |
+| `map` | E | 知识地图：会话主题聚类（input: `[minSize]`，缺省 1） |
+| `blindspots` | E | 知识盲区：反复搜索但历史无覆盖的主题（需求缺口清单） |
+| `pulse` | E | 主动脉搏：主动洞察（检索盲区 + 反馈学习 + 索引健康，本地计算） |
+| `insight` | F | 知识资产报告（input: `[会话ID]`，缺省输出全局实体图谱与主题趋势，
+  带会话 id 时输出该会话实体 / 建议标签 / 关联会话） |
+| `todo` | F | 前瞻记忆：到期的未兑现意图清单（轴线 20，本地计算；附即将到来栏） |
+| `review` | F | 间隔重复：到期「问题→解法」复习清单（轴线 21，本地计算；
+  input: `[记得|忘了] [片段ID]` 评分并告知下次间隔） |
+| `analogy` | F | 类比检索：按问题结构形状找同构先例（轴线 22，本地计算；
+  input: `<问题描述>`，跨域类比单独标注） |
+| `forecast` | F | 遗忘预测体检：滑落区/深度遗忘区知识清单与保持率（轴线 23，
+  本地计算；滑落区优先——最佳巩固窗口） |
+| `rhythm` | F | 记忆节律报告：命中率、ease 系数与投影间隔阶梯（轴线 24，
+  本地计算；标准曲线 → 你的曲线） |
+| `research` | G | 跨会话深度研究（input: `<研究问题>`；块级检索历史对话并合成
+  带 `[编号]` 引用来源的回答，附证据来源列表） |
 
 命令 handler 与 HTTP 端点复用同一套模块内服务函数，不重复实现逻辑。
 
@@ -170,6 +330,44 @@ export function apply(ctx: Context): void {
   - `'conversation.session.header.actions'`：导出按钮、交接摘要按钮、对话内搜索按钮；
   - `'conversation.input.dock'`：导入历史摘要入口；
   - `'conversation.view'`：全局检索视图页、成本报表视图页。
+- 轴线 1（E 模块）客户端：`SearchView` 含语义/关键词模式一键切换（`semantic` 状态，
+  语义模式走 `/retrieval/search`，关键词模式走 `/search`）、语义排名徽章
+  （词法 #n · 语义 #n）。开关状态切换即重查（依赖数组含 `semantic`）。
+- 轴线 2（B 模块）客户端：`HandoffDialog` 含查询聚焦输入（`focus` 字段）、
+  分层摘要统计（层数/分块数/缓存命中）、上下文血缘图谱（`/handoff/lineage`
+  的祖先/后代链路可视化）；`ImportSummaryDock` 携带 `sourceSessionId` 记录继承边。
+- 轴线 4（F 模块）客户端：`KnowledgePanel`（全局实体图谱 + 单会话实体列表 +
+  建议标签一键应用 + 关联会话推荐），经 `SearchView` 结果项的「知识」按钮展开；
+  点击实体名直接发起检索（知识变检索入口）、点击关联会话直达对话。
+- 轴线 5（G 模块）客户端：`SearchView` 工具栏「深度研究」按钮 → 研究面板
+  （回答 + 证据来源列表 + 统计行）；`askSynthesis` 超时放宽至 120s（检索 + 合成耗时），
+  请求在途时按钮禁用并显示 Spinner；证据来源行点击 `openSession` 直达原会话
+  （每个论断可回溯验证）；「收起」清空面板。
+- 轴线 6（B 模块）客户端：`HandoffDialog` 顶部上下文压力仪表（`/handoff/context-health`）：
+  占用百分比进度条 + 估算 token + 耗尽预测（"按当前增速约还可 N 回合"）+ 四级分级
+  配色（healthy 绿 / watch 黄 / advice 橙 / critical 红）与建议文案；随会话切换自动刷新。
+- 轴线 7（F 模块）客户端：`KnowledgePanel` 顶部主题趋势区块（`/knowledge/trends`）：
+  动量榜行（类型徽章 + 实体名 + rising/falling/stable 方向标签 + 动量百分比 +
+  8 周迷你柱状图），点击趋势行以实体名发起检索。
+- 轴线 17（G 模块）客户端：`SearchView` 深度研究结果的「知识演化」区块——
+  信念时间线行（锚: 旧值 → 新值 + 升级/回退/变化标签 + 时间），附演化摘要。
+- 轴线 18/19（E 模块）客户端：`SearchView` 工具栏「主动脉搏」按钮 → 洞察卡片面板
+  （`/retrieval/insights`，每次打开重新合成）：severity 三级配色（critical/watch/info）
+  + 文本 + 行动建议 + 信号源标注；认知三轴扩展后并行拉取 `/knowledge/pulse`，
+  两源卡片按 severity 合并重排，认知源失败静默降级。
+- 认知三轴（轴线 20/21/22，F 模块）客户端：`SearchView` 工具栏「认知面板」按钮 →
+  `CognitionPanel`（`/knowledge/cognition` 单次请求驱动）：到期意图列表（超期徽章，
+  ≥14 天转红，点击直达来源会话）+ 即将到来预告行；到期复习为检索式练习卡片
+  （先看问题回忆 →「回想后看解法」翻开 → 「记得/忘了」评分，Toast 告知下次间隔，
+  评分后卡片离队）；类比检索输入框 + 命中卡片（跨域类比/同域先例徽章 + 结构相似度 +
+  共享约束类别 Pill，点击直达来源会话）。
+- 元认知三轴（轴线 23/24/25，F 模块）客户端：认知面板新增遗忘预测区——保持率进度条
+  （分区语义色：stable 绿 / warning 橙 / critical 红）+ 分区徽章 + 距跌破阈值倒计时，
+  滑落区优先展示（最佳巩固窗口），顶部计数行「稳定 N · 滑落 N · 深忘 N」，点击直达
+  来源会话；复习区升级为负荷感知——每张卡片带分诊结论（保持率 + 理由），洪峰时顶部
+  显示顺延徽章（复习洪峰：N 条顺延）与负荷摘要，节律标记（节律 ×N.NN）常驻标题行；
+  评分 Toast 附节律系数注记，面板内 rhythm 状态同步更新（不重拉全量）；
+  `plan`/`forecast`/`rhythm` 字段可选——旧服务端缺省时对应区块静默降级。
 - 组件从 `@deepseek-ai/dsh-client-ui-primitives` 取（Button/Input/Select/Checkbox/Modal/Textarea/Spinner/Toast/Pill）。
 - 样式：CSS Modules（`*.module.css`），颜色只用 `--dsw-alias-*` 语义令牌；不写全局样式。
   例外：`convsearch/styles.ts` 以稳定 id 注入一段全局样式（浮动搜索栏 + `::highlight()` 绘制规则，
@@ -264,6 +462,42 @@ export function apply(ctx: Context): void {
   无 CompressionStream 的环境退回旧单 canvas 截断路径（16000px）。
 - **光栅引擎限制**：foreignObject 内脚本不执行（服务端打印页的自动打印 script 已在离屏舞台剥离）；
   外部图片先内联为 data: URL，不可达图片直接移除。
+
+语义检索模块（模块 E）行为契约：
+
+- **纯本地计算红线**：BM25 词法统计、字符 trigram 哈希向量、RRF 融合全部在本地完成，
+  零外部嵌入服务、零网络请求（隐私不出域）。语义近似 = 字符三元组重叠的哈希向量
+  余弦相似度——同义词不可达（无外部世界知识），但拼写变体/中英混合/词形漂移显著鲁棒。
+- **惰性增量索引**：每次检索前对账 `listSessions()` 与已索引快照（`updatedAt` 漂移检测，
+  缺省回退 `createdAt`），仅重读变更会话；已消失会话清理索引。5 秒节流
+  （距上次成功对账不足窗口时直接返回缓存统计）；在途对账 promise 去重
+  （并发检索只跑一次对账）。索引持久化 `retrieval-index` 表，启动时恢复内存索引。
+- **超长转录截断**：转录超 `INDEX_TRANSCRIPT_BUDGET`（80000）时保首尾截中段
+  （中段附提示行）——与模块 B 的截断策略对齐。
+- **单会话容错**：对账或片段生成中单会话读取失败静默跳过（保留旧统计 / 该条无片段），
+  不阻塞整体结果。
+- **强制重建**：`POST /retrieval/reindex` 清内存统计后全量对账（force=true 绕过节流），
+  持久化表逐条覆盖。
+
+知识资产模块（模块 F）行为契约：
+
+- **纯本地规则抽取**：六类实体（command/path/tech/code/term/version）全部经正则规则
+  抽取，零 LLM 调用、零网络请求。有序消费策略：URL 先整体让位（避免被 path/code 规则
+  误吞），各规则按优先级标记消费区间后不再重复提取；同一名称命中多类型时归并到
+  优先级最高的类型（command > path > tech > code > term > version）。
+- **噪声治理**：全大写缩写停用表（TODO/NOTE 等注释标记）、首字母大写停用表
+  （英文句首虚词）、中文术语停用表（引号内的常见非术语）；首字母大写词需频次 ≥2
+  才采纳（一次性句首大写多为假阳性）。单会话实体条数封顶（按分数截取）。
+- **倒排索引增量维护**：会话旧频次与新抽取结果做 diff，只写发生变化的实体记录
+  （未受影响的记录零 IO）；实体全部会话频次归零时删除记录。索引持久化
+  `knowledge-entities` 表（`v/<sessionId>` 版本记录 + `e/<type>:<小写名>` 倒排记录）。
+- **标签建议只建议不写入**：`suggestedTags` 仅返回头部实体名（长度对齐 TagStore 规范），
+  写入须经模块 D 的 `/tags` 端点由用户确认——尊重现有标签系统与用户判断。
+- **关联会话归一**：相似度 = 共享实体 IDF 加权分 ÷ 两会话实体集规模的几何平均
+  （余弦式归一，避免实体多的会话占尽便宜）；稀有实体的重叠权重更高
+  （更说明"在谈同一件事"）。
+- **对账策略**：与模块 E 对齐（5 秒节流 + 在途去重 + updatedAt 漂移检测）；
+  `POST /knowledge/reanalyze` 清空全部状态后全量重建。
 
 核心服务行为契约：
 

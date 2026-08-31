@@ -248,3 +248,141 @@
   font-size: 12px;
   color: var(--dsw-alias-text-secondary, #646a73);
 }
+
+/* ------------------------------------------------------------------------- */
+/* 轴线 6：上下文压力仪表（token 估算 / 耗尽预测 / 分级建议） */
+/* ------------------------------------------------------------------------- */
+
+.pressureRow {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.pressureHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pressureLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.pressureValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.pressureForecast {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.pressureBar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+  overflow: hidden;
+}
+
+.pressureFill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-success-default, #34c724);
+  transition: width 0.3s ease;
+}
+
+.pressureSuggestion {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* 分级配色：watch 黄、advice 橙、critical 红（fill 与左边框联动）。 */
+.pressure_watch .pressureFill {
+  background: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_advice .pressureFill {
+  background: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_advice {
+  border-color: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_critical .pressureFill {
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.pressure_critical {
+  border-color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 轴线 2：查询聚焦输入行 + 上下文血缘面板 */
+/* ------------------------------------------------------------------------- */
+
+.focusRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.focusInput {
+  flex: 1;
+}
+
+.lineageSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lineageList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lineageGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lineageLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.lineageItem {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.lineageDepth {
+  flex: none;
+  color: var(--dsw-alias-brand-default, #3b82f6);
+  font-variant-numeric: tabular-nums;
+}
+
+.lineageText {
+  min-width: 0;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

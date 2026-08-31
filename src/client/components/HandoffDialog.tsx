@@ -19,13 +19,21 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   deleteHandoffTemplate,
+  fetchContextHealth,
   fetchExportSessions,
+  fetchHandoffLineage,
   fetchHandoffTemplates,
   generateHandoff,
   importHandoff,
   saveHandoffTemplate,
 } from '../api.js'
-import type { HandoffTemplate, SessionRecord } from '../api.js'
+import type {
+  ContextHealthResponse,
+  HandoffStats,
+  HandoffTemplate,
+  LineageNode,
+  SessionRecord,
+} from '../api.js'
 import styles from './HandoffDialog.module.css'
 
 /** 组件 props：sessionId 由 slot 的 inject 注入。 */
@@ -53,8 +61,19 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
   const [sessionFilter, setSessionFilter] = useState('')
   const [summary, setSummary] = useState('')
   const [model, setModel] = useState('')
+  const [stats, setStats] = useState<HandoffStats | undefined>(undefined)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState('')
+  /** 查询聚焦主题（轴线 2）：输入不自动触发，Enter/按钮显式重新生成。 */
+  const [focus, setFocus] = useState('')
+  const focusRef = useRef('')
+  focusRef.current = focus
+  /** 所选会话的上下文血缘（轴线 2 继承图谱）。 */
+  const [lineage, setLineage] = useState<{ ancestors: readonly LineageNode[]; descendants: readonly LineageNode[] } | undefined>(undefined)
+  const [lineageLoading, setLineageLoading] = useState(false)
+  const [lineageError, setLineageError] = useState('')
+  /** 上下文压力评估（轴线 6）：token 估算 / 耗尽预测 / 分级建议。 */
+  const [health, setHealth] = useState<ContextHealthResponse | undefined>(undefined)
   const [templates, setTemplates] = useState<readonly HandoffTemplate[]>([])
   const [templatesLoading, setTemplatesLoading] = useState(false)
   const [templatesError, setTemplatesError] = useState('')
@@ -88,12 +107,18 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
       setGenerating(true)
       setGenerateError('')
       try {
-        const result = await generateHandoff({ sessionId: targetSessionId }, { signal })
+        // focus 从 ref 读取（输入不触发重生成，Enter/按钮经 retryToken 显式触发）。
+        const appliedFocus = focusRef.current.trim()
+        const result = await generateHandoff(
+          { sessionId: targetSessionId, focus: appliedFocus || undefined },
+          { signal },
+        )
         if (cancelled()) return
         if (!dirtyRef.current) {
           setSummary(result.summary)
         }
         setModel(result.model)
+        setStats(result.stats)
       } catch (error) {
         if (cancelled()) return
         setGenerateError(error instanceof Error ? error.message : '交接摘要生成失败')
@@ -175,12 +200,58 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     const controller = new AbortController()
     let cancelled = false
     dirtyRef.current = false
+    setStats(undefined)
     void generate(selectedSessionId, controller.signal, () => cancelled)
     return () => {
       cancelled = true
       controller.abort()
     }
   }, [props.open, selectedSessionId, generate, retryToken])
+
+  // 选中会话变化时拉取上下文血缘（轴线 2 继承图谱；失败静默不阻塞摘要）。
+  useEffect(() => {
+    if (!props.open || !selectedSessionId) {
+      setLineage(undefined)
+      setLineageError('')
+      return
+    }
+    let cancelled = false
+    setLineageLoading(true)
+    setLineageError('')
+    fetchHandoffLineage(selectedSessionId)
+      .then((response) => {
+        if (!cancelled) setLineage({ ancestors: response.ancestors, descendants: response.descendants })
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLineageError(err instanceof Error ? err.message : '血缘查询失败')
+      })
+      .finally(() => {
+        if (!cancelled) setLineageLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [props.open, selectedSessionId])
+
+  // 选中会话变化时拉取上下文压力评估（轴线 6；失败静默不阻塞摘要）。
+  useEffect(() => {
+    if (!props.open || !selectedSessionId) {
+      setHealth(undefined)
+      return
+    }
+    let cancelled = false
+    fetchContextHealth(selectedSessionId)
+      .then((response) => {
+        if (!cancelled) setHealth(response)
+      })
+      .catch(() => {
+        // 压力评估失败：不展示仪表，不阻塞摘要主流程。
+        if (!cancelled) setHealth(undefined)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [props.open, selectedSessionId])
 
   /** 选中某个会话（单选）：点击已选中项不重复触发生成。 */
   const selectSession = useCallback(
@@ -230,6 +301,7 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
 
   /** 将当前摘要作为新对话起点：不带 sessionId 导入 = 武装给下一个新对话。
    *
+   * 携带 sourceSessionId（当前选中会话）记录继承图谱边（轴线 2）。
    * 武装成功后派发 `companion:armed-changed` 自定义事件，供 dock（ImportSummaryDock）刷新武装状态。
    */
   const handleImport = useCallback(async (): Promise<void> => {
@@ -239,7 +311,10 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     }
     setImporting(true)
     try {
-      await importHandoff({ summary })
+      await importHandoff({
+        summary,
+        sourceSessionId: selectedSessionId || undefined,
+      })
       window.dispatchEvent(new CustomEvent('companion:armed-changed'))
       Toast.push('已武装给下一个新对话，新建对话时将自动注入该摘要', 'success')
       props.onClose()
@@ -248,7 +323,7 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
     } finally {
       setImporting(false)
     }
-  }, [summary, props.onClose])
+  }, [summary, selectedSessionId, props.onClose])
 
   /** 载入模板内容到编辑区（视为用户主动设置的内容，同样置脏以防在途生成覆盖）。 */
   const handleLoadTemplate = useCallback((template: HandoffTemplate): void => {
@@ -362,6 +437,58 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
           ) : null}
         </div>
 
+        {health !== undefined ? (
+          <div className={`${styles.pressureRow} ${styles[`pressure_${health.level}`] ?? ''}`}>
+            <div className={styles.pressureHead}>
+              <span className={styles.pressureLabel}>上下文压力</span>
+              <span className={styles.pressureValue}>
+                {Math.round(health.ratio * 100)}%（约 {health.estimatedTokens} token）
+              </span>
+              {health.remainingTurns !== null ? (
+                <span className={styles.pressureForecast}>
+                  按当前增速约还可 {health.remainingTurns} 回合
+                </span>
+              ) : null}
+            </div>
+            <div className={styles.pressureBar}>
+              <div
+                className={styles.pressureFill}
+                style={{ width: `${Math.min(100, Math.round(health.ratio * 100))}%` }}
+              />
+            </div>
+            <span className={styles.pressureSuggestion}>{health.suggestion}</span>
+          </div>
+        ) : null}
+
+        <div className={styles.focusRow}>
+          <Input
+            className={styles.focusInput}
+            type="search"
+            value={focus}
+            onChange={(event) => setFocus(event.target.value)}
+            onKeyDown={(event) => {
+              // Enter 快捷应用聚焦：与「聚焦重新生成」按钮等价（经 retryToken
+              // 并入生成 effect，复用取消守卫；同时重置脏标记允许覆盖）。
+              if (event.key === 'Enter' && selectedSessionId && !generating) {
+                dirtyRef.current = false
+                setRetryToken((token) => token + 1)
+              }
+            }}
+            placeholder="查询聚焦主题（可选），如：部署流程、性能优化…"
+          />
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (!selectedSessionId || generating) return
+              dirtyRef.current = false
+              setRetryToken((token) => token + 1)
+            }}
+            disabled={!selectedSessionId || generating}
+          >
+            聚焦重新生成
+          </Button>
+        </div>
+
         <div className={styles.status}>
           {generating ? <Spinner label="正在生成所选会话的交接摘要…" /> : null}
           {!generating && generateError ? (
@@ -399,7 +526,60 @@ export function HandoffDialog(props: HandoffDialogProps): ReactElement {
           }}
           placeholder="生成的交接摘要将显示在这里；也可以直接粘贴或编辑内容…"
         />
-        {model ? <div className={styles.modelInfo}>生成模型：{model}</div> : null}
+        {model ? (
+          <div className={styles.modelInfo}>
+            生成模型：{model}
+            {stats?.hierarchical
+              ? ` · 分层摘要：${stats.chunks} 段（${stats.cachedChunks} 段命中缓存）`
+              : ''}
+          </div>
+        ) : null}
+
+        {selectedSessionId ? (
+          <div className={styles.lineageSection}>
+            <div className={styles.sectionTitle}>上下文血缘</div>
+            {lineageLoading ? <Spinner label="查询血缘…" /> : null}
+            {!lineageLoading && lineageError ? (
+              <div className={styles.hint}>{lineageError}</div>
+            ) : null}
+            {!lineageLoading && !lineageError && lineage ? (
+              lineage.ancestors.length === 0 && lineage.descendants.length === 0 ? (
+                <div className={styles.hint}>该会话暂无摘要血缘记录</div>
+              ) : (
+                <div className={styles.lineageList}>
+                  {lineage.ancestors.length > 0 ? (
+                    <div className={styles.lineageGroup}>
+                      <span className={styles.lineageLabel}>← 来源（内容流入）</span>
+                      {lineage.ancestors.map((node) => (
+                        <div key={`a-${node.sessionId}`} className={styles.lineageItem}>
+                          <span className={styles.lineageDepth}>{'←'.repeat(node.depth)}</span>
+                          <span className={styles.lineageText}>
+                            会话 {node.sessionId.slice(0, 8)}…
+                            {node.excerpt ? `「${node.excerpt}」` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  {lineage.descendants.length > 0 ? (
+                    <div className={styles.lineageGroup}>
+                      <span className={styles.lineageLabel}>→ 去向（内容流向）</span>
+                      {lineage.descendants.map((node) => (
+                        <div key={`d-${node.sessionId}`} className={styles.lineageItem}>
+                          <span className={styles.lineageDepth}>{'→'.repeat(node.depth)}</span>
+                          <span className={styles.lineageText}>
+                            会话 {node.sessionId.slice(0, 8)}…
+                            {node.excerpt ? `「${node.excerpt}」` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              )
+            ) : null}
+          </div>
+        ) : null}
 
         <div className={styles.actions}>
           <Button variant="secondary" onClick={() => void handleCopy()}>
