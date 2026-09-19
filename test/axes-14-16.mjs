@@ -12,11 +12,11 @@ import {
   textGramVector,
   docGramVector,
   sparseCosine,
-} from './lib/core/retrieval/engine.js'
-import { suggestQueries } from './lib/core/retrieval/suggest.js'
-import { explainHit } from './lib/core/retrieval/explain.js'
-import { relaxQuery } from './lib/core/retrieval/rescue.js'
-import { expandQuery } from './lib/core/retrieval/query.js'
+} from '../lib/core/retrieval/engine.js'
+import { suggestQueries } from '../lib/core/retrieval/suggest.js'
+import { explainHit } from '../lib/core/retrieval/explain.js'
+import { relaxQuery } from '../lib/core/retrieval/rescue.js'
+import { expandQuery } from '../lib/core/retrieval/query.js'
 
 let passed = 0
 function ok(label, fn) {

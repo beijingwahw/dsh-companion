@@ -1,5 +1,5 @@
 /**
- * 模块 E：本地语义检索（retrieval）插件——轴线 1/8/9/10/11/12/13/14/15/16 的宿主侧接线。
+ * 模块 E：本地语义检索（retrieval）插件——轴线 1/8/9/10/11/12/13/14/15/16/28 的宿主侧接线。
  *
  * 能力：纯本地混合检索（BM25 词法 + trigram 哈希向量语义近似 + RRF 融合），
  * 检索质量显著超越纯 FTS 关键词匹配，且零外部依赖、零隐私外泄。
@@ -24,18 +24,25 @@
  *   形状相似度、新近/反馈加成分解）+ 一句话人话摘要；
  * - 零命中救援（轴线 16）：检索失败时自动放宽查询（宽阈值纠错 0.35 +
  *   噪声词剔除）重试，救援结果明确标注、可回溯；
+ * - 学习排序（轴线 28）：FTRL-Proximal 在线学习排序——点击训练偏好对
+ *   （点击项正例 + skip-above 未点击负例），六维特征（词法/语义排名
+ *   RRF 变换、新近、反馈、标题命中、偏置）预测点击概率并转为乘性
+ *   微调（冷启动零影响、暖机后 ±30% 封顶、遗憾界次线性收敛）；
  * - HTTP 端点：`GET /retrieval/search`（混合检索 + 扩展 + 诊断 + 反馈 +
- *   多样性 + 解释 + 救援）、`GET /retrieval/suggest`（查询建议）、
- *   `GET /retrieval/status`（索引状态）、`POST /retrieval/reindex`
- *   （全量重建）、`POST /retrieval/feedback`（点击反馈）、
- *   `GET /retrieval/clusters`（主题簇知识地图）；
+ *   多样性 + 解释 + 救援 + 学习微调）、`GET /retrieval/suggest`
+ *   （查询建议）、`GET /retrieval/status`（索引状态 + 排序器诊断）、
+ *   `POST /retrieval/reindex`（全量重建）、`POST /retrieval/feedback`
+ *   （点击反馈 + 在线训练）、`GET /retrieval/clusters`（主题簇知识地图）；
  * - 命令 `find`：语义检索历史对话（与 HTTP 复用同一服务函数，
- *   输出附扩展溯源、救援说明、命中解释与质量摘要）；命令 `map`：知识地图速览。
+ *   输出附扩展溯源、救援说明、命中解释与质量摘要）；命令 `map`：知识
+ *   地图速览；命令 `rank`：学习排序器诊断（训练进度 + 特征权重画像）。
  *
  * 索引持久化：companion 域 `retrieval-index` 表（键 = 会话 id，
  * 值 = 文档统计形状，见 core/retrieval/engine.js）；启动时恢复内存索引。
  * 反馈持久化：companion 域 `retrieval-feedback` 表（键 = 会话 id，
  * 值 = 点击画像，见 core/retrieval/feedback.js）。
+ * 模型持久化：companion 域 `retrieval-ranker` 表（单记录 'model'，
+ * 值 = FTRL-Proximal 累积器状态，见 core/retrieval/ranker.js）。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Domain, KvTable } from '../../core/storage-adapter.js'
@@ -73,12 +80,24 @@ import { clusterSessions, type SessionCluster } from '../../core/retrieval/clust
 import { suggestQueries, type QuerySuggestion } from '../../core/retrieval/suggest.js'
 import { explainHit, type HitExplanation } from '../../core/retrieval/explain.js'
 import { relaxQuery, type RescueAction } from '../../core/retrieval/rescue.js'
+import { negationFilterOf, parseNegations } from '../../core/retrieval/negate.js'
 import {
   analyzeBlindSpots,
   sanitizeMissRecord,
   type BlindSpotReport,
   type MissRecord,
 } from '../../core/retrieval/blindspots.js'
+import {
+  buildRankerFeatures,
+  emptyRankerModel,
+  learnedMultiplier,
+  rankerDiagnostics,
+  RANKER_NEGATIVE_WEIGHT,
+  sanitizeRankerModel,
+  updateRanker,
+  type RankerFeatures,
+  type RankerModel,
+} from '../../core/retrieval/ranker.js'
 import {
   blindSpotInsights,
   composePulse,
@@ -153,6 +172,14 @@ interface RetrievalFeedbackInfo {
   readonly boosted: ReadonlyArray<{ readonly sessionId: string; readonly boost: number }>
 }
 
+/** 学习排序信息（轴线 28 响应形状；模型冷启动时缺省）。 */
+interface RetrievalLearnedInfo {
+  /** 学习微调是否作用于本轮排序。 */
+  readonly applied: boolean
+  /** 模型累计更新次数（暖机进度）。 */
+  readonly updates: number
+}
+
 /** 混合检索服务结果（HTTP 与命令共用）。 */
 interface RetrievalSearchResult {
   hits: RetrievalHit[]
@@ -166,6 +193,10 @@ interface RetrievalSearchResult {
   diversity?: DiversityInfo
   /** 零命中救援（轴线 16；仅触发救援且有结果时缺省）。 */
   rescue?: RetrievalRescue
+  /** 学习排序（轴线 28；模型冷启动时缺省）。 */
+  learned?: RetrievalLearnedInfo
+  /** 负向词排除（`-词` 修饰符；无排除词时缺省）。 */
+  negations?: readonly string[]
 }
 
 /** 索引对账结果。 */
@@ -188,6 +219,17 @@ export function apply(ctx: Context): void {
   let missesTable: KvTable<MissRecord> | undefined
   /** 查询文本 → 零命中记录（内存权威状态；写穿回 missesTable）。 */
   const misses = new Map<string, MissRecord>()
+  /** 学习排序器模型表（轴线 28；就绪后赋值）。 */
+  let rankerTable: KvTable<RankerModel> | undefined
+  /** FTRL-Proximal 在线排序模型（内存权威状态；写穿回 rankerTable）。 */
+  let rankerModel: RankerModel = emptyRankerModel()
+  /**
+   * 最近一次检索的呈现上下文（轴线 28 训练原料）：
+   * 点击发生时，排在点击项之上的未点击项即 skip-above 负例。
+   */
+  let lastSearchContext:
+    | { query: string; entries: ReadonlyArray<{ sessionId: string; features: RankerFeatures }> }
+    | undefined
   /** 最近一次对账完成时间（节流基准）。 */
   let lastSyncAt = 0
   /** 在途对账 promise（并发检索去重，只跑一次）。 */
@@ -220,6 +262,10 @@ export function apply(ctx: Context): void {
         const record = sanitizeMissRecord(raw)
         if (record) misses.set(record.query, record)
       }
+      // 轴线 28：恢复 FTRL-Proximal 排序模型（损坏记录静默回退冷启动）。
+      rankerTable = domain.table<RankerModel>('retrieval-ranker')
+      const restoredRanker = sanitizeRankerModel(rankerTable.get('model'))
+      if (restoredRanker) rankerModel = restoredRanker
     })
     .catch(() => {
       // 存储域失败：核心服务已发 notice，这里仅避免未处理 rejection。
@@ -323,6 +369,10 @@ export function apply(ctx: Context): void {
     await syncIndex(false)
     const limit = Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT)
     const now = Date.now()
+    // 负向词（`-词` 修饰符）：排除是硬约束不是降权——命中排除词元的
+    // 文档在排序前整体出局；判定用与索引同源的分词器（口径一致）。
+    const parsed = parseNegations(params.query)
+    const negationKeep = negationFilterOf(parsed.negations)
     const corpus = {
       docCount: index.size,
       termDf: index.termDfSnapshot(),
@@ -333,6 +383,10 @@ export function apply(ctx: Context): void {
       if (params.to !== undefined && doc.createdAt > params.to) return false
       return true
     }
+    const docFilter =
+      negationKeep !== undefined
+        ? (doc: IndexedDoc) => dateFilter(doc) && negationKeep(doc.termFreqs)
+        : dateFilter
     /** 扩展 + 检索的单轮执行（首轮与救援轮共用）。 */
     const runSearch = (queryText: string) => {
       // 轴线 8：查询智能——拼写纠错 + 语料共现扩展（倒排表直达，纯本地）。
@@ -340,17 +394,17 @@ export function apply(ctx: Context): void {
       const hits = index.search(
         expanded.queryText,
         limit,
-        dateFilter,
+        docFilter,
         // 轴线 9：时序感知（半衰期 30 天、强度 25% 用引擎缺省值）。
         { now },
       )
       return { expanded, hits }
     }
-    let { expanded, hits } = runSearch(params.query)
+    let { expanded, hits } = runSearch(parsed.queryText)
     // 轴线 16：零命中救援——原查询失败后放宽重试（宽阈值纠错 + 噪声剔除）。
     let rescue: RetrievalRescue | undefined
     if (hits.length === 0 && index.size > 0) {
-      const relaxed = relaxQuery(params.query, corpus.termDf)
+      const relaxed = relaxQuery(parsed.queryText, corpus.termDf)
       if (relaxed.applied) {
         const retry = runSearch(relaxed.queryText)
         if (retry.hits.length > 0) {
@@ -382,6 +436,29 @@ export function apply(ctx: Context): void {
         boosted.push({ sessionId: hit.sessionId, boost: Number(feedback.toFixed(4)) })
       }
     }
+    // 轴线 28：学习排序——FTRL-Proximal 模型对每次命中预测点击概率，
+    // 转为乘性微调（冷启动零影响，暖机后 ±30% 封顶；特征与训练口径
+    // 一致：排名 RRF 变换 + 加成归一 + 标题命中 + 偏置）。
+    let learned: { applied: boolean; updates: number } | undefined
+    const featureMap = new Map<string, RankerFeatures>()
+    if (rankerModel.updates > 0) {
+      for (const hit of hits) {
+        const doc = index.get(hit.sessionId)
+        if (doc === undefined) continue
+        const breakdown = breakdowns.get(hit.sessionId) ?? { recency: 0, feedback: 0 }
+        const features = buildRankerFeatures({
+          lexicalRank: hit.lexicalRank,
+          semanticRank: hit.semanticRank,
+          recencyBoost: breakdown.recency,
+          feedbackBoost: breakdown.feedback,
+          query: params.query,
+          title: doc.title,
+        })
+        featureMap.set(hit.sessionId, features)
+        hit.score *= learnedMultiplier(rankerModel, features)
+      }
+      learned = { applied: true, updates: rankerModel.updates }
+    }
     hits.sort((a, b) => b.score - a.score)
     // 轴线 12：MMR 多样性重排——头部从「最优的重复」变成「最优且互补」。
     const poolSize = diversityPoolSize(limit, hits.length)
@@ -409,6 +486,34 @@ export function apply(ctx: Context): void {
     } else {
       ordered = hits.slice(0, limit)
       diversity = { applied: false, pool: pool.length, lambda: DEFAULT_MMR_LAMBDA }
+    }
+    // 轴线 28：记录本轮呈现上下文（最终呈现序 + 特征快照）——点击
+    // 到来时，排在点击项之上的未点击项即 skip-above 负例。冷启动模型
+    // 未收集特征时补建（首轮搜索必须先有特征快照，点击才能训练）。
+    const contextEntries: Array<{ sessionId: string; features: RankerFeatures }> = []
+    for (const hit of ordered) {
+      const cached = featureMap.get(hit.sessionId)
+      if (cached !== undefined) {
+        contextEntries.push({ sessionId: hit.sessionId, features: cached })
+        continue
+      }
+      const doc = index.get(hit.sessionId)
+      if (doc === undefined) continue
+      const breakdown = breakdowns.get(hit.sessionId) ?? { recency: 0, feedback: 0 }
+      contextEntries.push({
+        sessionId: hit.sessionId,
+        features: buildRankerFeatures({
+          lexicalRank: hit.lexicalRank,
+          semanticRank: hit.semanticRank,
+          recencyBoost: breakdown.recency,
+          feedbackBoost: breakdown.feedback,
+          query: params.query,
+          title: doc.title,
+        }),
+      })
+    }
+    if (contextEntries.length > 0) {
+      lastSearchContext = { query: params.query.trim(), entries: contextEntries }
     }
     // 头部命中补摘要片段：并行读取原文定位最佳窗口（片段高亮仍按用户
     // 原始查询词，不掺扩展词）；失败静默降级为无片段。
@@ -458,6 +563,8 @@ export function apply(ctx: Context): void {
       feedback: boosted.length > 0 ? { boosted } : undefined,
       diversity,
       rescue,
+      learned,
+      negations: parsed.negations.length > 0 ? parsed.negations : undefined,
     }
   }
 
@@ -548,6 +655,9 @@ export function apply(ctx: Context): void {
 
   /**
    * 记录点击反馈（轴线 11）：查询词并入该会话的点击画像（写穿持久化）。
+   * 轴线 28：同一事件驱动 FTRL-Proximal 在线训练——点击会话为正例，
+   * 呈现序中排在它之上的未点击会话为 skip-above 负例（降权 0.25）；
+   * 训练后模型写穿持久化。
    * @returns 更新后的累计点击次数。
    */
   async function recordFeedback(sessionId: string, queryText: string): Promise<number> {
@@ -556,6 +666,24 @@ export function apply(ctx: Context): void {
     profiles.set(sessionId, next)
     // 写穿失败不回滚内存（下次点击会再写；画像可重建，非关键数据）。
     await feedbackTable?.put(sessionId, next).catch(() => undefined)
+    // 轴线 28：偏好对训练（仅当点击来自最近一次检索的呈现序）。
+    const context = lastSearchContext
+    if (context && context.query === queryText.trim()) {
+      const position = context.entries.findIndex((entry) => entry.sessionId === sessionId)
+      if (position >= 0) {
+        let model = updateRanker(rankerModel, context.entries[position].features, 1)
+        for (let i = 0; i < position; i += 1) {
+          model = updateRanker(
+            model,
+            context.entries[i].features,
+            0,
+            RANKER_NEGATIVE_WEIGHT,
+          )
+        }
+        rankerModel = model
+        void rankerTable?.put('model', model).catch(() => undefined)
+      }
+    }
     return next.clicks
   }
 
@@ -636,6 +764,7 @@ export function apply(ctx: Context): void {
         sendJson(res, 200, {
           indexed: index.size,
           lastSyncAt: lastSyncAt > 0 ? lastSyncAt : null,
+          ranker: rankerDiagnostics(rankerModel),
         })
       }),
     'companion.retrieval-http-status',
@@ -875,6 +1004,58 @@ export function apply(ctx: Context): void {
         },
       }),
     'companion.retrieval-command-blindspots',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'rank',
+        description: '学习排序：FTRL-Proximal 在线模型的训练进度与特征权重画像',
+        handler: async (): Promise<CommandResult> => {
+          try {
+            await ctx.companion.ready
+            const diagnostics = rankerDiagnostics(rankerModel)
+            const lines: string[] = ['学习排序器（FTRL-Proximal 在线学习）：', '']
+            if (diagnostics.updates === 0) {
+              lines.push('  模型冷启动——还没有点击训练样本')
+              lines.push('')
+              lines.push('  提示：检索后点击结果，排序器开始从你的每一次点击中学习')
+              return { kind: 'success', text: lines.join('\n') }
+            }
+            lines.push(
+              `  训练样本 ${diagnostics.examples} 条（点击 ${diagnostics.clicks} 次），累计更新 ${diagnostics.updates} 轮`,
+            )
+            lines.push(
+              `  暖机进度 ${(diagnostics.warmup * 100).toFixed(0)}%（满 50 次更新后微调达全幅 ±30%）`,
+            )
+            lines.push(
+              `  最近训练：${diagnostics.trainedAt > 0 ? formatBeijingTime(diagnostics.trainedAt) : '（无）'}`,
+            )
+            lines.push('')
+            lines.push('特征权重（正 = 提高点击概率，负 = 降低；0 = 该特征被稀疏化）:')
+            for (const feature of diagnostics.features) {
+              const bar =
+                feature.weight === 0
+                  ? '·'
+                  : feature.weight > 0
+                    ? '+'
+                    : '-'
+              lines.push(
+                `  ${bar} ${feature.name}: ${feature.weight >= 0 ? '+' : ''}${feature.weight.toFixed(4)}`,
+              )
+            }
+            lines.push('')
+            lines.push('  提示：权重是「你点开了什么」的规律画像——检索排序正随它微调')
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: error instanceof HttpError ? error.message : '学习排序诊断失败，请稍后重试',
+            }
+          }
+        },
+      }),
+    'companion.retrieval-command-rank',
   )
 }
 

@@ -31,6 +31,7 @@ export type InsightCategory =
   | 'intention'
   | 'review'
   | 'forecast'
+  | 'echo'
 
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info'
@@ -368,4 +369,114 @@ export function loadInsights(plan: {
       source: '负荷调度（轴 25）',
     },
   ]
+}
+
+/** 主题漂移信号 → 洞察卡片（轴线 30：注意力结构变化的主动播报）。 */
+export function driftInsights(stats: {
+  unitCount: number
+  changepoints: number
+  currentRunLength: number
+  lastUnitSurprise: number
+  currentRunTopTerms: readonly string[]
+}): readonly InsightCard[] {
+  if (stats.unitCount < 6) return []
+  if (stats.lastUnitSurprise >= 8) {
+    return [
+      {
+        category: 'topic',
+        severity: 'watch',
+        text: `最近一条对话偏离当前主题较远（意外度 ${stats.lastUnitSurprise.toFixed(1)} bit/词元）——可能是一次注意力切换的开端`,
+        action: '运行 drift 命令查看主题分段与切换点',
+        source: '主题漂移（轴 30）',
+      },
+    ]
+  }
+  if (stats.changepoints > 0 && stats.currentRunLength <= 2 && stats.unitCount >= 12) {
+    return [
+      {
+        category: 'topic',
+        severity: 'info',
+        text: `注意力刚切换到新主题（此前共 ${stats.changepoints} 次切换）——当前主题段刚起步`,
+        source: '主题漂移（轴 30）',
+      },
+    ]
+  }
+  if (stats.changepoints === 0 && stats.unitCount >= 15) {
+    const terms = stats.currentRunTopTerms.slice(0, 3).join('、')
+    const termPart = terms.length > 0 ? `（关键词：${terms}）` : ''
+    return [
+      {
+        category: 'topic',
+        severity: 'info',
+        text: `近 ${stats.unitCount} 个对话持续聚焦同一主题${termPart}——深度工作状态`,
+        source: '主题漂移（轴 30）',
+      },
+    ]
+  }
+  return []
+}
+
+/** 记忆固化信号 → 洞察卡片（轴线 31：近重复 = 天然强化证据）。 */
+export function consolidationInsights(stats: {
+  items: number
+  clusters: number
+  duplicates: number
+  topReinforcement: number
+}): readonly InsightCard[] {
+  if (stats.items < 8 || stats.clusters === 0) return []
+  const topPart =
+    stats.topReinforcement >= 3
+      ? `，最高频的一组已出现 ${stats.topReinforcement} 次（正在自然强化）`
+      : ''
+  return [
+    {
+      category: 'review',
+      severity: 'info',
+      text: `知识库检测到 ${stats.clusters} 组近重复记忆（${stats.duplicates} 条冗余已可折叠）${topPart}——反复遇到的问题最值得先固化`,
+      action: '运行 consolidate 命令查看重复簇与代表条目',
+      source: '记忆固化（轴 31）',
+    },
+  ]
+}
+
+/** 回声雷达信号 → 洞察卡片（轴线 33：会话级复发 = 固化模板信号）。 */
+export function echoRadarInsights(stats: {
+  sessions: number
+  clusters: number
+  duplicates: number
+  templateWorthy: number
+  recentEchoes: number
+  recentTotal: number
+  medianRecurrenceDays: number | null
+}): readonly InsightCard[] {
+  // 推送克制：样本不足或无回声不开口。
+  if (stats.sessions < 8 || stats.clusters === 0) return []
+  const periodPart =
+    stats.medianRecurrenceDays !== null
+      ? `，平均复发周期约 ${stats.medianRecurrenceDays} 天`
+      : ''
+  if (stats.templateWorthy > 0) {
+    return [
+      {
+        category: 'echo',
+        severity: 'watch',
+        text: `${stats.sessions} 场会话中检测到 ${stats.clusters} 组回声（${stats.duplicates} 场冗余）${periodPart}——${stats.templateWorthy} 个主题复发 ≥3 次，总在遗忘后重新发现`,
+        action: '运行 radar 命令查看回声簇，把高频主题固化为交接模板',
+        source: '回声雷达（轴 33）',
+      },
+    ]
+  }
+  // 无固化级主题时仅在回声率可观时知会（≥20% 且观察窗有样本）。
+  if (stats.recentTotal >= 5 && stats.recentEchoes / stats.recentTotal >= 0.2) {
+    return [
+      {
+        category: 'echo',
+        severity: 'info',
+        text: `近窗新会话回声率 ${Math.round((stats.recentEchoes / stats.recentTotal) * 100)}%（${stats.recentEchoes}/${stats.recentTotal}）——新对话中有相当部分在重新发现已知`,
+        action: '运行 radar 命令查看哪些主题在复发',
+        source: '回声雷达（轴 33）',
+      },
+    ]
+  }
+  return []
 }

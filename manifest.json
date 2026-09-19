@@ -2,7 +2,7 @@
   "$schema": "https://deepseek.com/harness/schemas/plugin-manifest/v1.json",
   "id": "deepseek-companion",
   "name": "DeepSeek Companion",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要（分层压缩 + 血缘图谱 + 上下文压力监测）、API 成本优化（动态计价 + 预测性成本智能）、全局对话检索、本地语义检索（混合排序 + 查询智能 + 时序感知 + 质量诊断 + 反馈学习 + 多样性重排 + 知识地图 + 查询建议 + 命中解释 + 零命中救援）、对话知识资产（实体图谱 + 关联会话 + 主题趋势）、跨会话知识合成（Deep Research）。",
   "author": "DeepSeek Companion Contributors",
   "license": "MIT",

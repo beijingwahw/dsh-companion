@@ -14,7 +14,7 @@ import {
   retentionIndex,
   RETENTION_THRESHOLD,
   CRITICAL_RETENTION,
-} from './lib/core/cognition/forecast.js'
+} from '../lib/core/cognition/forecast.js'
 import {
   adaptiveIntervalDays,
   clampEase,
@@ -27,23 +27,23 @@ import {
   EASE_MAX,
   EASE_MIN,
   TARGET_HIT_RATE,
-} from './lib/core/cognition/rhythm.js'
+} from '../lib/core/cognition/rhythm.js'
 import {
   planReviewLoad,
   reviewPriority,
   DEFAULT_DAILY_CAP,
-} from './lib/core/cognition/load.js'
+} from '../lib/core/cognition/load.js'
 import {
   dueReviews,
   gradeReview,
   nextDueAt,
   sanitizeReviewState,
-} from './lib/core/cognition/spaced.js'
+} from '../lib/core/cognition/spaced.js'
 import {
   forgettingForecastInsights,
   loadInsights,
   rhythmInsights,
-} from './lib/core/insights/pulse.js'
+} from '../lib/core/insights/pulse.js'
 
 let passed = 0
 function ok(label, fn) {

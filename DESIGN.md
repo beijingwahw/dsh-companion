@@ -112,7 +112,11 @@ export function apply(ctx: Context): void {
   单会话读取失败跳过（404 文案含会话 id），系统性错误上抛 `500`。
 
 ### 模块 B（handoff）
-- `POST /handoff/generate` `{ sessionId, template?, focus? }` → `{ summary, model, stats? }`
+- `POST /handoff/generate` `{ sessionId, template?, focus? }` → `{ summary, model, stats?, quality }`
+  `quality` 为纯本地摘要体检（`modules/handoff/quality.js`）：词元覆盖（源转录头部显著词在场率 +
+  `missingTerms` 漏词清单；角色标签等格式词剔除）、四段式结构完整（核心结论/已解决/背景/待办）、
+  长度纪律（500 字预算，每超 10% 扣 1 分）、压缩充分（源 ≥1000 字时要求 ≥3× 压缩比；短源中立）。
+  verdict 三档 strong/fair/weak；与生成模型无关——换模型/模板/Prompt 后同一把尺子可横向比较。
   `template` 可选：指定且存在时以该模板为摘要指令文本（支持 `{conversation_content}` 占位符，
   缺占位符则模板后追加"对话内容："段）；未指定/不存在回退固定契约 Prompt。
   `focus` 可选（轴线 2）：查询聚焦主题（≤ `FOCUS_MAX_CHARS` 字符），摘要定向保留相关内容。
@@ -165,18 +169,29 @@ export function apply(ctx: Context): void {
   （缓存命中率）、`modelShift`（模型迁移，如 `{ from: 'deepseek-chat', to: 'deepseek-reasoner' }`）；
   单价按计价引擎实时解析（峰谷感知）。任一参数非法 → `400`。
 - `GET    /cost/attribution?days=7` → 按模型分解的费用变化（当前窗口 vs 上一等长窗口）
+- `GET    /cost/advice` → `{ snapshot, cards, potentialSavingCny, summary }`
+  节能顾问（`modules/cost/advice.js`，纯函数决策层）：快照由用量表 + forecast 引擎 + 当前价表组装，
+  输出按严重度与节省金额排序的建议卡——`budget-pacing`（月末投影超支 → 剩余天数摊平日预算）、
+  `off-peak-shift`（高峰时段可延迟占比 × 价差 → 峰谷迁移月度节省）、`cache-uplift`（命中率 +10 点
+  的节省潜力）、`model-shift`（同厂商低价候选，保守提示不自动切换）。零副作用——采纳与否由用户决定。
   变化归因：定位"这个月多花的钱去哪了"（各模型用量/单价贡献分解）。
   `days` ∈ [1, 90]。
 
 ### 模块 D（search）
-- `GET  /search?query=&from=&to=&tags=a,b&limit=50` → `{ hits: [{ session, snippet?, tags }] }`
+- `GET  /search?query=&from=&to=&range=&tags=a,b&limit=50` → `{ hits: [{ session, snippet?, tags }] }`
+  `range` 为自然语言时间范围（`modules/search/timeRange.js`）：`近7天` / `昨天` / `上周`（周一起点）/
+  `本月` / `last week` 等中英表达 → 北京时间自然日对齐的闭区间；仅在未显式给 from/to 时生效，
+  未识别的表达静默忽略。
   `limit` 封顶 `MAX_SEARCH_LIMIT`（200）；`from`/`to` 历法非法 → `400`；
   有 `tags` 时向引擎取 `min(limit*10, 1000)` 候选再本地全命中过滤，避免引擎提前截断漏命中。
 - `GET  /tags?sessionId=` → `{ tags: string[] }`（缺省返回 `{ tags: Record<string, string[]> }`）
 - `POST /tags` `{ sessionId, add?, remove? }` → `{ tags: string[] }`
 
 ### 模块 E（retrieval）
-- `GET  /retrieval/search?query=&from=&to=&limit=50` → `{ hits: [{ session, snippet?, score, lexicalRank?, semanticRank? }] }`
+- `GET  /retrieval/search?query=&from=&to=&limit=50` → `{ hits: [...], negations? }`
+  查询支持负向词修饰符（`core/retrieval/negate.js`）：`-词` 从查询剥离进排除清单，命中排除词元
+  （与索引同源分词）的文档在排序前整体出局——排除是硬约束不是降权；`negations` 字段回传排除词
+  原形（溯源可回退）。裸 `-` 不视为修饰符。
   纯本地混合检索（轴线 1）：BM25 词法 + 字符 trigram 哈希向量语义近似 + RRF 倒数排名融合。
   `query` 必填（空串 `400`）；`from`/`to` 支持毫秒时间戳或 `YYYY-MM-DD`（北京时间，
   from 取当日零点、to 取当日末尾），历法非法或 `from > to` → `400`；`limit` 封顶 200。
@@ -268,8 +283,53 @@ export function apply(ctx: Context): void {
   `cap` 条（缺省 8，∈ [1, 50]，非法 `400`），超出部分明确顺延；
   `health`：clear（无到期）/ normal（容量内）/ overload（发生顺延）；
   保持率查表来自轴线 23 的 `retentionIndex`，查不到按阈值中性处理。
+- `GET  /knowledge/continents?limit=8` → `{ modularity, levels, communities: [{ id, size, sessionCount, internalWeight, topEntities, entities }], graph, summary }`
+  知识大陆（轴线 26）：实体倒排 → `buildEntityGraph` 共现图（边权 = 共现会话数）
+  → Louvain 两阶段迭代（局部移动 + 社区聚合）模块度最大化；枢纽实体只归属
+  连接最紧密的大陆；`limit` ∈ [1, 20]（默认 8），每块大陆成员封顶 12 实体。
+- `GET  /knowledge/starmap?q=&limit=15` → `{ seeds, nodes: [{ key, name, type, gravity, hopDistance, seed }], summary }`
+  星图导航（轴线 27）：查询命中实体为种子，带重启个性化 PageRank（阻尼 0.85）
+  算稳态引力分布 + BFS 跳数标注；多跳（2–3 跳）高分实体 = 图上隐性关联。
+  `q` 必填 ≤200 字符；种子未命中返回引导文案。
+- `GET  /knowledge/drift?lambda=16` → `{ lambda, changePoints, currentSegment, segments, summary }`
+  主题漂移（轴线 30）：会话流（标题 + 实体名投影）BOCPD 变点检测——
+  unigram 语言模型逐会话意外度 + 前向后向平滑；`lambda` ∈ [6, 96]（期望段长，
+  小 = 对切换更敏感）。
+- `GET  /knowledge/consolidation` → `{ items, clusters: [{ representativeId, representativeProblem, memberIds, reinforcement, firstSeenAt, lastSeenAt, cohesion }], duplicates, unique, compression, summary }`
+  记忆固化（轴线 31）：片段问题面 MinHash-LSH 近重复聚类（128 维签名 ×
+  16 带 × 8 行，S 曲线阈值 ≈ 0.71，真实 Jaccard ≥ 0.65 验证，并查集传递归并）；
+  簇数封顶 20。
+- `GET  /knowledge/archaeology?windows=4` → `{ windows: [{ index, sessions, fromAt, toAt, entities, edges, modularity, continents: [{ id, size, sessionCount, topEntities, memberKeys }] }], events: [{ kind, fromWindow, toWindow, topEntities, strength, description }], stats, summary }`
+  知识考古（轴线 32）：会话流按 index 均分为 N 个纪元（`windows` ∈ [2, 12]，默认 4；
+  实际取 min(请求值, floor(会话数/2))，不足 4 个含实体会话返回引导文案），
+  每纪元独立共现图 + 同源 Louvain，相邻纪元社区按成员实体键集合 Jaccard
+  建立血脉（阈值 0.3）；血脉结构分类五类板块事件：birth（无前置血脉）/
+  continuation（一对一血脉，strength = 成员重叠率）/ split（一对多血脉）/
+  merge（多对一血脉）/ dissolve（无后继血脉）；单实体社区（成员 < 2）不参与
+  事件分析。与轴线 30 分工：漂移看会话级注意力切换（浪），考古看纪元级
+  知识域结构变迁（洋流）。
+- `GET  /knowledge/radar?days=30` → `{ sessions, clusters: [{ representativeId, representativeTitle, memberIds, occurrences, firstSeenAt, lastSeenAt, recurrenceDays, cohesion, action }], duplicates, echoRateWindowDays, recentTotal, recentEchoes, echoRate, medianRecurrenceDays, summary }`
+  回声雷达（轴线 33）：会话级文本投影（标题 + 实体名，零转录重读）过
+  轴线 31 同源 MinHash-LSH（阈值 0.55——会话比片段更长更杂，阈值略宽）；
+  `recurrenceDays` = 首末间隔 / (次数 − 1)（≥3 次才有周期，两次无法估）；
+  `echoRate` = 近 `days`（∈ [1, 365]，默认 30）天新会话中命中历史回声
+  （簇内非时间序首个）的占比；`action`：template（≥3 次，建议固化交接模板）/
+  watch（2 次）；簇数封顶 20。
+- `GET  /knowledge/darkmatter?limit=20` → `{ graph: { nodes, edges }, links: [{ u, v, uKey, vKey, commonNeighbors, adamicAdar, resourceAllocation, score, evidence, interpretation }], candidates, budgetExhausted, summary }`
+  知识暗物质（轴线 34）：实体共现图上的链路预测（Liben-Nowell & Kleinberg
+  局部指数族）——对每个**未连接**且存在共同邻居的实体对计算 CN / Adamic-Adar
+  （`Σ 1/ln(deg)`，对数度数折扣）/ Resource Allocation（`Σ 1/deg`，线性折扣）
+  三指数，融合分 = 0.5 × AA 归一 + 0.5 × RA 归一；候选对按桥节点（度数 ∈ (1, 40]）
+  展开，枢纽不作证据，预算熔断（默认 200k 对）防御病态稠密图；
+  `limit` ∈ [1, 50]（默认 20）。暗连接 = 研究建议（下一场对话值得把谁和谁
+  放到一起），与轴线 27 分工：星图沿已有边扩散（已知连接深挖），
+  暗物质预测缺失边（未知连接发现）。
 
 ### 模块 G（synthesis）
+- `POST /synthesis/preview` `{ question }` → `{ question, evidence: [{ index, sessionId, title?, createdAt, score, snippet }], sources, coverage, stats: { candidates, chunks, evidenceChunks, evidenceChars, estimatedPromptTokens }, note }`
+  研究预演（零 LLM）：证据收集管线（召回 → 块级检索 → 次模选择）跑到底但不进模型——先看将采用的
+  证据（编号与合成时的 [n] 引用一致）、方面覆盖与 token 预算占用（粗估 ~2 字符/token），再决定是否
+  调 `/synthesis/answer` 花钱合成。证据为空时返回引导文案而非报错。
 - `POST /synthesis/answer` `{ question }` → `{ answer, model, sources: [{ sessionId, title?, createdAt, snippet }], stats: { candidates, chunks, evidenceChunks, evidenceChars } }`
   跨会话知识合成（轴线 5，Deep Research）：
   - **召回**：FTS 关键词召回（`searchSessions`，24 个）+ 近期会话兜底（12 个），
@@ -318,6 +378,19 @@ export function apply(ctx: Context): void {
   本地计算；滑落区优先——最佳巩固窗口） |
 | `rhythm` | F | 记忆节律报告：命中率、ease 系数与投影间隔阶梯（轴线 24，
   本地计算；标准曲线 → 你的曲线） |
+| `continents` | F | 知识大陆：实体共现图 Louvain 社区发现（轴线 26，本地计算；
+  input: `[limit]`，缺省 8） |
+| `starmap` | F | 星图导航：个性化 PageRank 多跳隐性关联（轴线 27，本地计算；
+  input: `<查询实体>`） |
+| `drift` | F | 主题漂移：BOCPD 变点检测定位注意力切换（轴线 30，本地计算；
+  input: `[lambda]` ∈ [6, 96]，缺省 16） |
+| `consolidate` | F | 记忆固化：MinHash-LSH 近重复聚类报告（轴线 31，本地计算） |
+| `archaeology` | F | 知识考古：纪元切片回放大陆形成史，板块事件五类分类（轴线 32，
+  本地计算；新生/延续/分裂/合并/消亡） |
+| `radar` | F | 回声雷达：会话级复发检测——回声簇 / 复发周期 / 回声率（轴线 33，
+  本地计算；≥3 次复发建议固化为交接模板） |
+| `darkmatter` | F | 知识暗物质：共现图链路预测——CN/AA/RA 三指数发现该连而未连的
+  实体对（轴线 34，本地计算；input: `[limit]`，缺省 20） |
 | `research` | G | 跨会话深度研究（input: `<研究问题>`；块级检索历史对话并合成
   带 `[编号]` 引用来源的回答，附证据来源列表） |
 

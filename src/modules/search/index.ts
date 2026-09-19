@@ -15,6 +15,7 @@ import { SessionId } from '../../core/ids.js'
 import { formatBeijingTime } from '../../core/time.js'
 import type { CommandInvocation, CommandResult } from '../../types/harness.js'
 import { searchSessions, type SearchParams } from './service.js'
+import { parseTimeRange } from './timeRange.js'
 import { TagStore } from './tags.js'
 
 /** 插件名。 */
@@ -202,6 +203,16 @@ function parseSearchParams(query: URLSearchParams): SearchParams {
   if (from !== null && from.length > 0) params.from = parseTimeParam(from, 'start')
   const to = query.get('to')
   if (to !== null && to.length > 0) params.to = parseTimeParam(to, 'end')
+  // 自然语言时间范围（「近7天」「上周」「本月」）：仅在未显式给
+  // from/to 时生效；未识别的表达静默忽略（不与显式参数打架）。
+  const rangeText = query.get('range')
+  if (rangeText !== null && params.from === undefined && params.to === undefined) {
+    const range = parseTimeRange(rangeText)
+    if (range !== undefined) {
+      params.from = range.from
+      params.to = range.to
+    }
+  }
   const tags = query.get('tags')
   if (tags !== null && tags.length > 0) {
     params.tags = tags

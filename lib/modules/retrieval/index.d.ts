@@ -1,5 +1,5 @@
 /**
- * 模块 E：本地语义检索（retrieval）插件——轴线 1/8/9/10/11/12/13/14/15/16 的宿主侧接线。
+ * 模块 E：本地语义检索（retrieval）插件——轴线 1/8/9/10/11/12/13/14/15/16/28 的宿主侧接线。
  *
  * 能力：纯本地混合检索（BM25 词法 + trigram 哈希向量语义近似 + RRF 融合），
  * 检索质量显著超越纯 FTS 关键词匹配，且零外部依赖、零隐私外泄。
@@ -24,18 +24,25 @@
  *   形状相似度、新近/反馈加成分解）+ 一句话人话摘要；
  * - 零命中救援（轴线 16）：检索失败时自动放宽查询（宽阈值纠错 0.35 +
  *   噪声词剔除）重试，救援结果明确标注、可回溯；
+ * - 学习排序（轴线 28）：FTRL-Proximal 在线学习排序——点击训练偏好对
+ *   （点击项正例 + skip-above 未点击负例），六维特征（词法/语义排名
+ *   RRF 变换、新近、反馈、标题命中、偏置）预测点击概率并转为乘性
+ *   微调（冷启动零影响、暖机后 ±30% 封顶、遗憾界次线性收敛）；
  * - HTTP 端点：`GET /retrieval/search`（混合检索 + 扩展 + 诊断 + 反馈 +
- *   多样性 + 解释 + 救援）、`GET /retrieval/suggest`（查询建议）、
- *   `GET /retrieval/status`（索引状态）、`POST /retrieval/reindex`
- *   （全量重建）、`POST /retrieval/feedback`（点击反馈）、
- *   `GET /retrieval/clusters`（主题簇知识地图）；
+ *   多样性 + 解释 + 救援 + 学习微调）、`GET /retrieval/suggest`
+ *   （查询建议）、`GET /retrieval/status`（索引状态 + 排序器诊断）、
+ *   `POST /retrieval/reindex`（全量重建）、`POST /retrieval/feedback`
+ *   （点击反馈 + 在线训练）、`GET /retrieval/clusters`（主题簇知识地图）；
  * - 命令 `find`：语义检索历史对话（与 HTTP 复用同一服务函数，
- *   输出附扩展溯源、救援说明、命中解释与质量摘要）；命令 `map`：知识地图速览。
+ *   输出附扩展溯源、救援说明、命中解释与质量摘要）；命令 `map`：知识
+ *   地图速览；命令 `rank`：学习排序器诊断（训练进度 + 特征权重画像）。
  *
  * 索引持久化：companion 域 `retrieval-index` 表（键 = 会话 id，
  * 值 = 文档统计形状，见 core/retrieval/engine.js）；启动时恢复内存索引。
  * 反馈持久化：companion 域 `retrieval-feedback` 表（键 = 会话 id，
  * 值 = 点击画像，见 core/retrieval/feedback.js）。
+ * 模型持久化：companion 域 `retrieval-ranker` 表（单记录 'model'，
+ * 值 = FTRL-Proximal 累积器状态，见 core/retrieval/ranker.js）。
  */
 import type { Context } from '@deepseek-ai/cordis';
 /** 插件名（Cordis fiber 诊断名）。 */

@@ -1,5 +1,6 @@
 /**
- * 隐私脱敏：导出对话前对手机号、邮箱、身份证号、银行卡号自动打码。
+ * 隐私脱敏：导出对话前对手机号、邮箱、身份证号、银行卡号、IP 地址、
+ * API 密钥/令牌（含 JWT）自动打码。
  * 全部在本地完成，脱敏后的文本才会进入导出文件。
  */
 export interface RedactionStats {
@@ -7,6 +8,10 @@ export interface RedactionStats {
     email: number;
     idCard: number;
     bankCard: number;
+    /** IPv4 地址（保留前两段）。 */
+    ipv4: number;
+    /** API 密钥 / Bearer 令牌 / JWT。 */
+    secret: number;
 }
 /**
  * 对文本执行脱敏。

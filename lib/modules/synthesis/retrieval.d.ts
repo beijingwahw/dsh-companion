@@ -15,21 +15,6 @@ export interface EvidenceChunk {
 export declare function chunkTranscript(turns: readonly TranscriptTurn[], targetChars: number): readonly (readonly TranscriptTurn[])[];
 /** 文本对问题的相关分：词法重合率与 trigram 余弦各占一半。 */
 export declare function scoreText(question: string, text: string): number;
-/** 证据选择参数。 */
-export interface EvidenceSelectionOptions {
-    /** 证据块数上限。 */
-    readonly maxChunks: number;
-    /** 单会话最多贡献的块数（证据多样性）。 */
-    readonly perSessionCap: number;
-    /** 证据总字符预算。 */
-    readonly charBudget: number;
-}
-/**
- * 选择证据块：分数降序贪心装入预算。
- * 剩余预算装不下有意义片段（<200 字符）时提前收束；
- * 超预算的尾部块截断到剩余预算而非整块丢弃。
- */
-export declare function selectEvidence(candidates: readonly EvidenceChunk[], options: EvidenceSelectionOptions): readonly EvidenceChunk[];
 /**
  * 组装合成 Prompt：契约式指令（只用证据 / 编号引用 / 结论先行 /
  * 指出矛盾）+ 编号证据块（每块带来源会话标题与日期）。

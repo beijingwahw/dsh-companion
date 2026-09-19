@@ -8,9 +8,9 @@ import assert from 'node:assert/strict'
 import {
   buildIndexedDoc,
   HybridRetrievalIndex,
-} from './lib/core/retrieval/engine.js'
-import { expandQuery } from './lib/core/retrieval/query.js'
-import { diagnoseRetrieval } from './lib/core/retrieval/quality.js'
+} from '../lib/core/retrieval/engine.js'
+import { expandQuery } from '../lib/core/retrieval/query.js'
+import { diagnoseRetrieval } from '../lib/core/retrieval/quality.js'
 
 let passed = 0
 function ok(label, fn) {

@@ -1,12 +1,15 @@
 /**
- * 模块 G：跨会话知识合成（synthesis）——轴线 5「Deep Research over 历史对话」。
+ * 模块 G：跨会话知识合成（synthesis）——轴线 5/29「Deep Research over 历史对话」。
  *
  * 把"问自己的历史"变成一次研究流程：
  * 1. **召回**：FTS 关键词召回（sessionQuery.searchSessions）+ 近期会话兜底，
  *    合并去重为候选池（FTS 对长自然语言问句召回不稳，近期会话保证覆盖）；
  * 2. **块级检索**：逐会话读取转录 → 按回合边界分块 → 词法 + trigram
  *    双通道打分（复用 core/retrieval 分词器），片段粒度精排；
- * 3. **证据选择**：分数降序贪心装入预算，单会话块数封顶（多样性）；
+ * 3. **次模证据选择**（轴线 29）：设施选址次模目标（相关性 + 问题方面
+ *    覆盖 × 稀有度权重）最大化，惰性贪婪（CELF）在「块数 × 单会话
+ *    上限 × 字符预算」三重约束下选取——互补证据优于同义重复，冗余被
+ *    目标函数自动惩罚，(1−1/e) 理论保证；
  * 4. **合成**：契约式 Prompt（只用证据 / 编号引用 / 结论先行 / 指出矛盾）
  *    经成本网关（或直连）调用 LLM，回答带 [编号] 引用；
  * 5. **来源回链**：每个贡献证据的会话生成来源视图（标题/日期/片段），
@@ -29,10 +32,10 @@ import {
   buildSynthesisPrompt,
   chunkTranscript,
   scoreText,
-  selectEvidence,
   type EvidenceChunk,
 } from './retrieval.js'
 import { analyzeEvolution, type EvolutionReport } from '../../core/synthesis/evolution.js'
+import { selectSubmodular } from '../../core/synthesis/submodular.js'
 
 /** 插件名（Cordis fiber 诊断名）。 */
 export const name = 'companion-synthesis'
@@ -94,7 +97,41 @@ export interface SynthesisResult {
     readonly chunks: number
     readonly evidenceChunks: number
     readonly evidenceChars: number
+    /** 次模选择诊断（轴线 29）。 */
+    readonly selection: {
+      /** 问题方面覆盖率（[0,1]）。 */
+      readonly coverage: number
+      /** 惰性贪婪边际增益评估次数（效率证据）。 */
+      readonly evaluations: number
+      /** 候选方面总数。 */
+      readonly aspects: number
+    }
   }
+}
+
+/** 研究预演结果（零 LLM）：证据预览 + 覆盖 + 预算占用，供"先看后买"。 */
+export interface SynthesisPreview {
+  readonly question: string
+  /** 采用的证据块预览（编号与合成时的 [n] 引用一致）。 */
+  readonly evidence: ReadonlyArray<{
+    readonly index: number
+    readonly sessionId: string
+    readonly title?: string
+    readonly createdAt: number
+    readonly score: number
+    readonly snippet: string
+  }>
+  readonly sources: readonly SynthesisSource[]
+  /** 问题方面覆盖率（[0,1]；次模选择诊断）。 */
+  readonly coverage: number
+  readonly stats: {
+    readonly candidates: number
+    readonly chunks: number
+    readonly evidenceChunks: number
+    readonly evidenceChars: number
+    readonly estimatedPromptTokens: number
+  }
+  readonly note: string
 }
 
 /** 插件入口。 */
@@ -181,11 +218,19 @@ export function apply(ctx: Context): void {
     return [...head, ...tail]
   }
 
+  /** 证据收集产物：召回候选 / 全部候选块 / 次模选择结果 / 采用证据。 */
+  interface CollectedEvidence {
+    candidates: readonly SessionRecord[]
+    chunks: EvidenceChunk[]
+    selection: ReturnType<typeof selectSubmodular>
+    evidence: EvidenceChunk[]
+  }
+
   /**
-   * 跨会话知识合成主流程：召回 → 块级检索 → 证据选择 → LLM 合成。
-   * @param question 自然语言研究问题。
+   * 证据收集管线（召回 → 块级检索 → 次模选择）：answer 与 preview 共用。
+   * 零 LLM 调用——预演端点在管线终点停下，合成端点继续走模型。
    */
-  async function answerQuestion(question: string): Promise<SynthesisResult> {
+  async function collectEvidence(question: string): Promise<CollectedEvidence> {
     // 1) 候选召回。
     const candidates = await recallSessions(question)
     // 2) 块级检索：逐会话读取 → 预算截断 → 分块 → 双通道打分。
@@ -215,12 +260,27 @@ export function apply(ctx: Context): void {
         })
       }
     }
-    // 3) 证据选择。
-    const evidence = selectEvidence(chunks, {
+    // 3) 次模证据选择（轴线 29）：设施选址目标最大化相关 × 覆盖，
+    //    惰性贪婪逼近 (1−1/e) 最优；selected 携带原始下标，预算尾截断
+    //    的文本回写到 EvidenceChunk。
+    const selection = selectSubmodular(chunks, question, {
       maxChunks: MAX_EVIDENCE_CHUNKS,
       perSessionCap: PER_SESSION_CHUNK_CAP,
       charBudget: EVIDENCE_CHAR_BUDGET,
     })
+    const evidence: EvidenceChunk[] = selection.selected.map((item) => {
+      const original = chunks[item.index]
+      return item.text === original.text ? original : { ...original, text: item.text }
+    })
+    return { candidates, chunks, selection, evidence }
+  }
+
+  /**
+   * 跨会话知识合成主流程：召回 → 块级检索 → 证据选择 → LLM 合成。
+   * @param question 自然语言研究问题。
+   */
+  async function answerQuestion(question: string): Promise<SynthesisResult> {
+    const { candidates, chunks, selection, evidence } = await collectEvidence(question)
     if (evidence.length === 0) {
       throw new HttpError('历史对话中没有找到与问题相关的内容，请换个问法或先积累更多对话', 404)
     }
@@ -260,7 +320,58 @@ export function apply(ctx: Context): void {
         chunks: chunks.length,
         evidenceChunks: evidence.length,
         evidenceChars: evidence.reduce((sum, chunk) => sum + chunk.text.length, 0),
+        selection: {
+          coverage: selection.coverage,
+          evaluations: selection.evaluations,
+          aspects: selection.aspects,
+        },
       },
+    }
+  }
+
+  /**
+   * 研究预演（零 LLM）：证据收集管线跑到底但不进模型——先看证据、
+   * 覆盖与预算占用，再决定是否花钱合成。证据为空时返回引导而不报错。
+   */
+  async function previewQuestion(question: string): Promise<SynthesisPreview> {
+    const { candidates, chunks, selection, evidence } = await collectEvidence(question)
+    const evidenceChars = evidence.reduce((sum, chunk) => sum + chunk.text.length, 0)
+    const sources: SynthesisSource[] = []
+    const seenSessions = new Set<string>()
+    for (const chunk of evidence) {
+      if (seenSessions.has(chunk.sessionId)) continue
+      seenSessions.add(chunk.sessionId)
+      sources.push({
+        sessionId: chunk.sessionId,
+        title: chunk.title,
+        createdAt: chunk.createdAt,
+        snippet: chunk.text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_CHARS),
+      })
+    }
+    return {
+      question,
+      evidence: evidence.map((chunk, index) => ({
+        index: index + 1,
+        sessionId: chunk.sessionId,
+        title: chunk.title,
+        createdAt: chunk.createdAt,
+        score: Number(chunk.score.toFixed(4)),
+        snippet: chunk.text.replace(/\s+/g, ' ').trim().slice(0, SNIPPET_CHARS),
+      })),
+      sources,
+      coverage: selection.coverage,
+      stats: {
+        candidates: candidates.length,
+        chunks: chunks.length,
+        evidenceChunks: evidence.length,
+        evidenceChars,
+        /** 合成 prompt 的粗估 token 数（中英混排按 ~2 字符/token 保守估）。 */
+        estimatedPromptTokens: Math.ceil((question.length + evidenceChars) / 2),
+      },
+      note:
+        evidence.length === 0
+          ? '历史对话中没有找到与问题相关的内容——预演零证据，不建议发起合成'
+          : '预演完成（零 LLM 调用）：以上是合成将采用的证据与覆盖，确认后再调 /synthesis/answer',
     }
   }
 
@@ -279,6 +390,19 @@ export function apply(ctx: Context): void {
         sendJson(res, 200, await answerQuestion(question))
       }),
     'companion.synthesis-http-answer',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('POST', '/synthesis/preview', async (_req, res, { body }) => {
+        const record = readObject(body)
+        const question = requireString(record.question, 'question')
+        if (question.length > QUESTION_MAX_CHARS) {
+          throw new HttpError(`question 长度不能超过 ${QUESTION_MAX_CHARS} 字符`, 400)
+        }
+        sendJson(res, 200, await previewQuestion(question))
+      }),
+    'companion.synthesis-http-preview',
   )
 
   // ------------------------------------------------------------------

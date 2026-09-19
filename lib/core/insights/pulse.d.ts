@@ -20,7 +20,7 @@
  * 同一时刻的两次调用产生相同结果（可测试性）。
  */
 /** 洞察分类（决定展示分组与图标语义）。 */
-export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast';
+export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo';
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info';
 /** 单条洞察卡片。 */
@@ -106,4 +106,29 @@ export declare function loadInsights(plan: {
     totalDue: number;
     todayCount: number;
     deferredCount: number;
+}): readonly InsightCard[];
+/** 主题漂移信号 → 洞察卡片（轴线 30：注意力结构变化的主动播报）。 */
+export declare function driftInsights(stats: {
+    unitCount: number;
+    changepoints: number;
+    currentRunLength: number;
+    lastUnitSurprise: number;
+    currentRunTopTerms: readonly string[];
+}): readonly InsightCard[];
+/** 记忆固化信号 → 洞察卡片（轴线 31：近重复 = 天然强化证据）。 */
+export declare function consolidationInsights(stats: {
+    items: number;
+    clusters: number;
+    duplicates: number;
+    topReinforcement: number;
+}): readonly InsightCard[];
+/** 回声雷达信号 → 洞察卡片（轴线 33：会话级复发 = 固化模板信号）。 */
+export declare function echoRadarInsights(stats: {
+    sessions: number;
+    clusters: number;
+    duplicates: number;
+    templateWorthy: number;
+    recentEchoes: number;
+    recentTotal: number;
+    medianRecurrenceDays: number | null;
 }): readonly InsightCard[];

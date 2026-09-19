@@ -1,11 +1,34 @@
 {
   "name": "dsh-companion",
-  "version": "0.1.0",
-  "description": "DeepSeek Companion — DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化、全局对话检索。",
+  "version": "0.4.0",
+  "description": "DeepSeek Companion — DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、本地语义检索、对话知识资产、跨会话知识合成。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "keywords": [
+    "deepseek",
+    "dsh-plugin",
+    "companion",
+    "export",
+    "handoff",
+    "cost-optimization",
+    "search",
+    "semantic-retrieval",
+    "knowledge-graph",
+    "deep-research"
+  ],
+  "homepage": "https://github.com/beijingwahw/dsh-companion",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beijingwahw/dsh-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/beijingwahw/dsh-companion/issues"
+  },
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -26,7 +49,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "node --expose-internals --import tsx ./node_modules/@deepseek-ai/cordis/bin.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node test/run-all.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

@@ -10,13 +10,13 @@ import {
   extractIntentions,
   sanitizeIntentionRecord,
   upcomingIntentions,
-} from './lib/core/cognition/prospective.js'
+} from '../lib/core/cognition/prospective.js'
 import {
   extractEpisodes,
   extractShape,
   mergeShape,
   sanitizeEpisodeRecord,
-} from './lib/core/cognition/episodes.js'
+} from '../lib/core/cognition/episodes.js'
 import {
   dueReviews,
   gradeReview,
@@ -25,13 +25,13 @@ import {
   nextDueAt,
   reviewStrength,
   sanitizeReviewState,
-} from './lib/core/cognition/spaced.js'
-import { findAnalogies, shapeSimilarity } from './lib/core/cognition/analogy.js'
+} from '../lib/core/cognition/spaced.js'
+import { findAnalogies, shapeSimilarity } from '../lib/core/cognition/analogy.js'
 import {
   dueIntentionInsights,
   dueReviewInsights,
   episodeInsights,
-} from './lib/core/insights/pulse.js'
+} from '../lib/core/insights/pulse.js'
 
 let passed = 0
 function ok(label, fn) {

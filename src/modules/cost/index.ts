@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { DeepSeekApiError, type ChatMessage } from '../../core/deepseek.js'
 import { HttpError, sendJson } from '../../core/http.js'
 import type { ModelPrice, PriceTable } from '../../core/price/types.js'
-import { beijingDayKey, beijingMonthKey } from '../../core/time.js'
+import { beijingDayKey, beijingMonthKey, beijingParts, isPeakTime } from '../../core/time.js'
 import type { DailyUsage } from '../../core/usage.js'
 import {
   attributeChange,
@@ -29,6 +29,7 @@ import {
   whatIfSimulate,
   type WhatIfScenario,
 } from './forecast.js'
+import { composeCostAdvice, type CostAdviceSnapshot } from './advice.js'
 import { CostGatewayService } from './gateway.js'
 import { compileCustomRules, MAX_CUSTOM_RULES, MAX_RULE_PATTERN_LENGTH } from './router.js'
 import { registerCostSettings, type CostCustomRule, type CostSettings } from './settings.js'
@@ -293,6 +294,89 @@ export function apply(ctx: Context): void {
         ))
       }),
     'companion.cost-http-attribution',
+  )
+
+  // ------------------------------------------------------------------
+  // 节能顾问：把用量数据翻译成按优先级排序的行动建议（纯本地决策层）
+  // ------------------------------------------------------------------
+
+  /** 本月剩余天数（含今天，北京时间）。 */
+  function remainingDaysOfMonth(now: number): number {
+    const p = beijingParts(now)
+    const daysInMonth = new Date(Date.UTC(p.year, p.month, 0)).getUTCDate()
+    return Math.max(1, daysInMonth - p.day + 1)
+  }
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/cost/advice', async (_req, res) => {
+        const { usage } = await ctx.companion.ready
+        const settings = scope.get()
+        const now = Date.now()
+        const today = beijingDayKey(now)
+        const window = await recentWindow(30)
+        const month = usage.month(now)
+        const monthSpend = month.reduce((sum, row) => sum + row.costCny, 0)
+        // 月末投影复用 forecast 引擎；历史不足时缺省（pacing 建议自动降级）。
+        const forecast = forecastSpend(window, remainingDaysOfMonth(now), today)
+        const monthProjection = forecast.sufficient ? forecast.monthEndProjectedCny : undefined
+        // 30 天窗口的缓存结构与可延迟占比。
+        const totalCalls = window.reduce((sum, row) => sum + row.calls, 0)
+        const totalPrompt = window.reduce((sum, row) => sum + row.promptTokens, 0)
+        const totalHit = window.reduce((sum, row) => sum + (row.cacheHitTokens ?? 0), 0)
+        const totalDeferred = window.reduce((sum, row) => sum + row.deferredCalls, 0)
+        // 主力模型 = 本月费用最高的模型。
+        const modelSpend = new Map<string, number>()
+        for (const row of month) {
+          for (const [model, slice] of Object.entries(row.byModel)) {
+            modelSpend.set(model, (modelSpend.get(model) ?? 0) + slice.costCny)
+          }
+        }
+        const primaryModel =
+          [...modelSpend.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'deepseek-chat'
+        // 计价：当前价表（峰谷计划优先），缺省回退平价。
+        const sheet = ctx.companion.prices.currentSheet
+        const peakPrice = sheet.scheduled?.peak?.[primaryModel] ?? sheet.current[primaryModel]
+        const offPeakPrice = sheet.scheduled?.offPeak?.[primaryModel] ?? sheet.current[primaryModel]
+        const basePrice = sheet.current[primaryModel]
+        // 同厂商更低价候选：现价表中输入单价比主力低 ≥30% 的最便宜模型。
+        let cheaperModel: CostAdviceSnapshot['cheaperModel']
+        if (basePrice !== undefined) {
+          for (const [model, price] of Object.entries(sheet.current)) {
+            if (model === primaryModel) continue
+            const ratio = price.inputMiss / basePrice.inputMiss
+            if (ratio < 0.7 && (cheaperModel === undefined || ratio < cheaperModel.priceRatio)) {
+              cheaperModel = { model, priceRatio: Number(ratio.toFixed(2)) }
+            }
+          }
+        }
+        const snapshot: CostAdviceSnapshot = {
+          monthSpend,
+          monthlyBudget: settings.monthlyBudgetCny ?? 0,
+          monthProjection,
+          remainingDays: remainingDaysOfMonth(now),
+          peakNow: isPeakTime(now),
+          deferrableRatio: totalCalls > 0 ? totalDeferred / totalCalls : 0,
+          peakPremium:
+            peakPrice !== undefined && offPeakPrice !== undefined && offPeakPrice.inputMiss > 0
+              ? (peakPrice.inputMiss - offPeakPrice.inputMiss) / offPeakPrice.inputMiss
+              : 0,
+          cacheHitRate: totalPrompt > 0 ? totalHit / totalPrompt : 0,
+          cacheDiscount:
+            basePrice !== undefined && basePrice.inputMiss > 0
+              ? 1 - basePrice.inputCacheHit / basePrice.inputMiss
+              : 0,
+          cacheMissTokens: totalPrompt - totalHit,
+          inputPricePerMillion:
+            (isPeakTime(now) ? peakPrice?.inputMiss : offPeakPrice?.inputMiss) ??
+            basePrice?.inputMiss ??
+            0,
+          primaryModel,
+          cheaperModel,
+        }
+        sendJson(res, 200, { snapshot, ...composeCostAdvice(snapshot) })
+      }),
+    'companion.cost-http-advice',
   )
 
   ctx.effect(

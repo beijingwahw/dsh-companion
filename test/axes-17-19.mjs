@@ -4,14 +4,14 @@
  * （盲区分析）、insights/pulse（主动洞察引擎）。
  */
 import assert from 'node:assert/strict'
-import { analyzeEvolution, compareVersions } from './lib/core/synthesis/evolution.js'
-import { analyzeBlindSpots, sanitizeMissRecord } from './lib/core/retrieval/blindspots.js'
+import { analyzeEvolution, compareVersions } from '../lib/core/synthesis/evolution.js'
+import { analyzeBlindSpots, sanitizeMissRecord } from '../lib/core/retrieval/blindspots.js'
 import {
   blindSpotInsights,
   composePulse,
   indexInsights,
   learningInsights,
-} from './lib/core/insights/pulse.js'
+} from '../lib/core/insights/pulse.js'
 
 let passed = 0
 function ok(label, fn) {

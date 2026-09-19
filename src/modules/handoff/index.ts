@@ -40,6 +40,7 @@ import {
   MAX_TEMPLATE_NAME_CHARS,
   TemplateStore,
 } from './templates.js'
+import { scoreHandoffQuality, type HandoffQuality } from './quality.js'
 
 /** 插件名（Cordis fiber 诊断名）。 */
 export const name = 'companion-handoff'
@@ -56,12 +57,17 @@ const ARMED_TTL_MS = 24 * 3600_000
 /** focus 参数最大长度（超出 400）。 */
 const FOCUS_MAX_CHARS = 400
 
+/** 交接摘要长度契约（字符）：质量评分的长度纪律基准。 */
+const SUMMARY_BUDGET_CHARS = 500
+
 /** 交接摘要生成结果。 */
 interface HandoffResult {
   summary: string
   model: string
   /** 分层摘要统计（轴线 2）；单发路径为缺省形状。 */
   stats?: HierarchicalStats
+  /** 摘要质量体检（纯本地：词元覆盖 / 四段式结构 / 长度 / 压缩比）。 */
+  quality?: HandoffQuality
 }
 
 /** 插件入口。 */
@@ -237,7 +243,14 @@ export function apply(ctx: Context): void {
         focus,
         templateContent,
       )
-      return { summary: result.summary, model: result.model || 'deepseek-chat', stats: result.stats }
+      return {
+        summary: result.summary,
+        model: result.model || 'deepseek-chat',
+        stats: result.stats,
+        quality: scoreHandoffQuality(formatted, result.summary, {
+          budgetChars: SUMMARY_BUDGET_CHARS,
+        }),
+      }
     }
     // 单发路径：预算内直接一次调用（模板优先，focus 注入契约 Prompt）。
     const promptText =
@@ -245,10 +258,14 @@ export function apply(ctx: Context): void {
         ? buildHandoffPromptWithTemplate(templateContent, formatted)
         : buildHandoffPromptWithFocus(formatted, focus)
     const result = await callModel([{ role: 'user', content: promptText }])
+    const summary = result.content.trim()
     return {
-      summary: result.content.trim(),
+      summary,
       model: result.model || 'deepseek-chat',
       stats: { hierarchical: false, chunks: 0, cachedChunks: 0 },
+      quality: scoreHandoffQuality(formatted, summary, {
+        budgetChars: SUMMARY_BUDGET_CHARS,
+      }),
     }
   }
 

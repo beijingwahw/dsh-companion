@@ -10,20 +10,20 @@ import {
   docGramVector,
   HybridRetrievalIndex,
   sparseCosine,
-} from './lib/core/retrieval/engine.js'
+} from '../lib/core/retrieval/engine.js'
 import {
   FEEDBACK_MAX_BOOST,
   feedbackBoost,
   recordClick,
   sanitizeFeedbackProfile,
-} from './lib/core/retrieval/feedback.js'
+} from '../lib/core/retrieval/feedback.js'
 import {
   DEFAULT_MMR_LAMBDA,
   diversityPoolSize,
   mmrSelect,
   MMR_MIN_POOL,
-} from './lib/core/retrieval/diversity.js'
-import { clusterSessions } from './lib/core/retrieval/clusters.js'
+} from '../lib/core/retrieval/diversity.js'
+import { clusterSessions } from '../lib/core/retrieval/clusters.js'
 
 let passed = 0
 function ok(label, fn) {
