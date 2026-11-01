@@ -51,13 +51,14 @@
  *   社区发现）、`GET /knowledge/starmap?q=`（星图导航：个性化
  *   PageRank）、`GET /knowledge/drift?lambda=`（主题漂移：BOCPD 变点
  *   分段）、`GET /knowledge/consolidation`（记忆固化：MinHash-LSH
- *   近重复聚类）；
+ *   近重复聚类）、`GET /knowledge/earlywarning?baseline=`（临界预警：
+ *   新奇度序列临界慢化先行信号，轴线 35）；
  * - 命令 `insight`：知识资产文本报告；`todo`：到期意图；`review`：
  *   今日分诊后的复习安排（`review <片段ID> ok|no` 评分）；
  *   `analogy <问题描述>`：同构经验检索；`forecast`：遗忘预测体检；
  *   `rhythm`：记忆节律报告；`continents`：知识大陆速览；
  *   `starmap <查询>`：星图导航；`drift`：主题漂移报告；
- *   `consolidate`：记忆固化报告。
+ *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）。
  *
  * 索引持久化：companion 域 `knowledge-entities` 表——
  * - 键 `v/<sessionId>` → 已分析版本（updatedAt 快照，漂移检测基准）；
@@ -153,6 +154,11 @@ import {
 } from '../../core/cognition/radar.js'
 import { detectDarkMatter, type DarkMatterReport } from '../../core/cognition/darkmatter.js'
 import {
+  detectEarlyWarning,
+  type EarlyWarningReport,
+  type EarlyWarningUnit,
+} from '../../core/cognition/earlywarning.js'
+import {
   ENTITY_TYPES,
   entityTypeWeight,
   extractEntities,
@@ -234,7 +240,16 @@ const MAX_STARMAP_LIMIT = 50
 /** 星图查询最大长度。 */
 const STARMAP_QUERY_MAX_CHARS = 200
 
-/** 主题漂移期望段长缺省值（单元 = 会话；轴线 30）。 */
+/** 临界预警缺省基线窗口（单元 = 会话；轴线 35）。 */
+const DEFAULT_EW_BASELINE = 16
+
+/** 临界预警（轴线 35）基线窗口下限。 */
+const MIN_EW_BASELINE = 8
+
+/** 临界预警（轴线 35）基线窗口上限。 */
+const MAX_EW_BASELINE = 64
+
+/** 主题漂移缺省危险率窗口。 */
 const DEFAULT_DRIFT_LAMBDA = 16
 
 /** 主题漂移期望段长参数范围。 */
@@ -945,8 +960,8 @@ export function apply(ctx: Context): void {
     }
   }
 
-  /** 主题漂移视图（轴线 30）：会话流（标题 + 实体名）上的 BOCPD 分段。 */
-  async function driftView(lambda: number): Promise<DriftReport> {
+  /** 会话流观测单元（标题 + 实体名投影）：轴线 30/35 共用同一投影纪律。 */
+  async function sessionTextUnits(): Promise<EarlyWarningUnit[]> {
     const { entities } = loadSnapshot()
     // 会话 → 实体名列表（倒排投影：零转录重读，纯内存）。
     const sessionEntityNames = new Map<string, string[]>()
@@ -958,7 +973,7 @@ export function apply(ctx: Context): void {
       }
     }
     const sessions = await ctx.sessionQuery.listSessions()
-    const units = sessions.map((session) => {
+    return sessions.map((session) => {
       const sessionId = String(session.id)
       const entityText = (sessionEntityNames.get(sessionId) ?? []).join(' ')
       const title = session.title ?? ''
@@ -968,7 +983,16 @@ export function apply(ctx: Context): void {
         text: `${title} ${entityText}`.trim(),
       }
     })
-    return detectTopicDrift(units, { hazardLambda: lambda })
+  }
+
+  /** 主题漂移视图（轴线 30）：会话流（标题 + 实体名）上的 BOCPD 分段。 */
+  async function driftView(lambda: number): Promise<DriftReport> {
+    return detectTopicDrift(await sessionTextUnits(), { hazardLambda: lambda })
+  }
+
+  /** 临界预警视图（轴线 35）：新奇度序列上的临界慢化先行信号。 */
+  async function earlyWarningView(baselineUnits: number): Promise<EarlyWarningReport> {
+    return detectEarlyWarning(await sessionTextUnits(), { baselineUnits })
   }
 
   /** 记忆固化视图（轴线 31）：片段问题面 + 代表问题文本的固化计划。 */
@@ -1432,6 +1456,17 @@ export function apply(ctx: Context): void {
         sendJson(res, 200, await driftView(lambda))
       }),
     'companion.knowledge-http-drift',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/knowledge/earlywarning', async (_req, res, { query }) => {
+        await ctx.companion.ready
+        await syncKnowledge(false)
+        const baseline = parseEwBaselineParam(query.get('baseline') ?? undefined)
+        sendJson(res, 200, await earlyWarningView(baseline))
+      }),
+    'companion.knowledge-http-earlywarning',
   )
 
   ctx.effect(
@@ -2018,6 +2053,71 @@ export function apply(ctx: Context): void {
   ctx.effect(
     () =>
       ctx.commands.register({
+        name: 'earlywarning',
+        description: '临界预警：新奇度临界慢化检测（注意力切换的先行信号，轴线 35）',
+        input: { hint: '[baseline]（基线窗口，缺省 16）' },
+        handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
+          const arg = (invocation.rawInput ?? '').trim()
+          let baseline = DEFAULT_EW_BASELINE
+          if (arg.length > 0) {
+            const parsed = Number(arg)
+            if (
+              !Number.isInteger(parsed) ||
+              parsed < MIN_EW_BASELINE ||
+              parsed > MAX_EW_BASELINE
+            ) {
+              return {
+                kind: 'error',
+                text: `baseline 必须是 [${MIN_EW_BASELINE}, ${MAX_EW_BASELINE}] 内的整数`,
+              }
+            }
+            baseline = parsed
+          }
+          try {
+            await ctx.companion.ready
+            await syncKnowledge(false)
+            const report = await earlyWarningView(baseline)
+            if (report.level === 'insufficient') {
+              return { kind: 'success', text: `临界预警待启动——${report.summary}` }
+            }
+            const lines: string[] = ['临界预警报告（Early-Warning Signals）：', '']
+            lines.push(
+              `  样本：${report.unitCount} 场对话（新奇度序列 ${report.seriesLength} 点）`,
+            )
+            lines.push(
+              `  AR(1)：基线半 ${report.baseline.ar1.toFixed(2)} → 近期半 ${report.recent.ar1.toFixed(2)}（Δ ${report.ar1Delta >= 0 ? '+' : ''}${report.ar1Delta.toFixed(2)}）`,
+            )
+            lines.push(
+              `  方差比：${report.varianceRatio.toFixed(1)}× ｜ 回弹率：${report.returnRate.toFixed(2)}（越小 = 越逼近临界点）`,
+            )
+            const levelLabel =
+              report.level === 'warning'
+                ? '⚠ warning——三证据共现，切换先行信号明确'
+                : report.level === 'watch'
+                  ? '◎ watch——临界慢化迹象初现'
+                  : '○ calm——注意力稳定'
+            lines.push(`  预警分级：${levelLabel}（预警分 ${report.score.toFixed(2)}）`)
+            lines.push('')
+            lines.push(`  ${report.summary}`)
+            if (report.advice) {
+              lines.push('')
+              lines.push(`  建议：${report.advice}`)
+            }
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: error instanceof HttpError ? error.message : '临界预警分析失败，请稍后重试',
+            }
+          }
+        },
+      }),
+    'companion.knowledge-command-earlywarning',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
         name: 'consolidate',
         description: '记忆固化：MinHash-LSH 近重复检测（同一问题的多次出现聚簇强化）',
         handler: async (): Promise<CommandResult> => {
@@ -2244,6 +2344,19 @@ function parseLambdaParam(value: string | undefined): number {
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed < MIN_DRIFT_LAMBDA || parsed > MAX_DRIFT_LAMBDA) {
     throw new HttpError(`lambda 必须是 [${MIN_DRIFT_LAMBDA}, ${MAX_DRIFT_LAMBDA}] 内的整数`, 400)
+  }
+  return parsed
+}
+
+/** 解析临界预警基线窗口参数（缺省回退默认值；非法 400；轴线 35）。 */
+function parseEwBaselineParam(value: string | undefined): number {
+  if (value === undefined || value === '') return DEFAULT_EW_BASELINE
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < MIN_EW_BASELINE || parsed > MAX_EW_BASELINE) {
+    throw new HttpError(
+      `baseline 必须是 [${MIN_EW_BASELINE}, ${MAX_EW_BASELINE}] 内的整数`,
+      400,
+    )
   }
   return parsed
 }

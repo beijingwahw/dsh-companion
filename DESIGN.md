@@ -324,6 +324,21 @@ export function apply(ctx: Context): void {
   `limit` ∈ [1, 50]（默认 20）。暗连接 = 研究建议（下一场对话值得把谁和谁
   放到一起），与轴线 27 分工：星图沿已有边扩散（已知连接深挖），
   暗物质预测缺失边（未知连接发现）。
+- `GET  /knowledge/earlywarning?baseline=16` → `{ now, unitCount, seriesLength, baseline: { units, ar1, variance }, recent: { units, ar1, variance }, ar1Delta, varianceRatio, slope, returnRate, score, level, novelty[], summary, advice? }`
+  临界预警（轴线 35）：会话流新奇度序列（每场对话与前 `baseline` 场基线的
+  一元分布 JS 散度，词表 df ≥ 2 与轴线 30 同纪律）上的临界慢化先行信号
+  （Scheffer et al. 2009, Nature）——三证据：**持续性**（近期半滞后 1 自相关
+  较基线半的上升；AR(1) 是主导特征值的矩估计，AR(1) 绝对值 < 0.35 不计
+  ——低自相关谈不上「慢化」）、**发散性**（方差比 > 1.6 起计，4× 满权；
+  基线半零方差且近期非零按满证据）、**漂移性**（近期半 OLS 斜率为正时的
+  相对爬升，40% 满权）；加权 0.45/0.30/0.25 融合为 `score` ∈ [0,1]。
+  **warning 要求 score ≥ 0.55 且至少两类证据（值 > 0.1）共现**（多指标
+  纪律——单一先行指标可误报）；watch = score ≥ 0.3。一次性跳变后回落
+  被漂移方向与方差对比否决（轴线 30 的领地）。`returnRate` = 1 − 近期
+  AR(1)（距临界点距离，[0,2]）。序列 < 40 点或全程零方差 → `insufficient`
+  平凡报告。`baseline` ∈ [8, 64] 整数（非法 `400`）；`novelty` 携带近端
+  64 点供迷你图。watch/warning 附 `advice`（warning 指向模块 B 交接摘要
+  ——趁注意力盆地切换前存档上下文）。
 
 ### 模块 G（synthesis）
 - `POST /synthesis/preview` `{ question }` → `{ question, evidence: [{ index, sessionId, title?, createdAt, score, snippet }], sources, coverage, stats: { candidates, chunks, evidenceChunks, evidenceChars, estimatedPromptTokens }, note }`
@@ -391,6 +406,9 @@ export function apply(ctx: Context): void {
   本地计算；≥3 次复发建议固化为交接模板） |
 | `darkmatter` | F | 知识暗物质：共现图链路预测——CN/AA/RA 三指数发现该连而未连的
   实体对（轴线 34，本地计算；input: `[limit]`，缺省 20） |
+| `earlywarning` | F | 临界预警：新奇度临界慢化先行信号——AR(1)/方差/斜率三证据
+  （轴线 35，本地计算；input: `[baseline]` ∈ [8, 64]，缺省 16；warning
+  建议为当前主题生成交接摘要） |
 | `research` | G | 跨会话深度研究（input: `<研究问题>`；块级检索历史对话并合成
   带 `[编号]` 引用来源的回答，附证据来源列表） |
 

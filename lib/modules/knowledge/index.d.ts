@@ -51,13 +51,14 @@
  *   社区发现）、`GET /knowledge/starmap?q=`（星图导航：个性化
  *   PageRank）、`GET /knowledge/drift?lambda=`（主题漂移：BOCPD 变点
  *   分段）、`GET /knowledge/consolidation`（记忆固化：MinHash-LSH
- *   近重复聚类）；
+ *   近重复聚类）、`GET /knowledge/earlywarning?baseline=`（临界预警：
+ *   新奇度序列临界慢化先行信号，轴线 35）；
  * - 命令 `insight`：知识资产文本报告；`todo`：到期意图；`review`：
  *   今日分诊后的复习安排（`review <片段ID> ok|no` 评分）；
  *   `analogy <问题描述>`：同构经验检索；`forecast`：遗忘预测体检；
  *   `rhythm`：记忆节律报告；`continents`：知识大陆速览；
  *   `starmap <查询>`：星图导航；`drift`：主题漂移报告；
- *   `consolidate`：记忆固化报告。
+ *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）。
  *
  * 索引持久化：companion 域 `knowledge-entities` 表——
  * - 键 `v/<sessionId>` → 已分析版本（updatedAt 快照，漂移检测基准）；
