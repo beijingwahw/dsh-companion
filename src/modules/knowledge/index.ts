@@ -44,21 +44,24 @@
  *   （认知总览：意图 + 复习 + 元认知三轴）、`GET /knowledge/intentions`
  *   （意图清单）、`POST /knowledge/review/grade`（复习评分 + 节律更新）、
  *   `GET /knowledge/analogy?q=`（类比检索）、`GET /knowledge/pulse`
- *   （模块 F 主动洞察：意图/复习/片段/预测/节律/负荷/漂移/固化八类
- *   信号源）、`GET /knowledge/forecast`（遗忘预测报告）、
+ *   （模块 F 主动洞察：意图/复习/片段/预测/节律/负荷/漂移/固化/回声/
+ *   预警十类信号源）、`GET /knowledge/forecast`（遗忘预测报告）、
  *   `GET /knowledge/rhythm`（记忆节律画像）、`GET /knowledge/load?cap=`
  *   （今日负荷计划）、`GET /knowledge/continents`（知识大陆：Louvain
  *   社区发现）、`GET /knowledge/starmap?q=`（星图导航：个性化
  *   PageRank）、`GET /knowledge/drift?lambda=`（主题漂移：BOCPD 变点
  *   分段）、`GET /knowledge/consolidation`（记忆固化：MinHash-LSH
  *   近重复聚类）、`GET /knowledge/earlywarning?baseline=`（临界预警：
- *   新奇度序列临界慢化先行信号，轴线 35）；
+ *   新奇度序列临界慢化先行信号，轴线 35）、`GET /knowledge/brokerage`
+ *   （结构洞掮客：Burt 网络约束 + Gould-Fernandez 五角色识别跨域
+ *   翻译桥梁实体，轴线 36）；
  * - 命令 `insight`：知识资产文本报告；`todo`：到期意图；`review`：
  *   今日分诊后的复习安排（`review <片段ID> ok|no` 评分）；
  *   `analogy <问题描述>`：同构经验检索；`forecast`：遗忘预测体检；
  *   `rhythm`：记忆节律报告；`continents`：知识大陆速览；
  *   `starmap <查询>`：星图导航；`drift`：主题漂移报告；
- *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）。
+ *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）；
+ *   `brokerage`：结构洞掮客报告（跨域桥梁实体）。
  *
  * 索引持久化：companion 域 `knowledge-entities` 表——
  * - 键 `v/<sessionId>` → 已分析版本（updatedAt 快照，漂移检测基准）；
@@ -122,6 +125,7 @@ import {
   dueIntentionInsights,
   dueReviewInsights,
   driftInsights,
+  earlyWarningInsights,
   echoRadarInsights,
   episodeInsights,
   forgettingForecastInsights,
@@ -153,6 +157,7 @@ import {
   type RadarSession,
 } from '../../core/cognition/radar.js'
 import { detectDarkMatter, type DarkMatterReport } from '../../core/cognition/darkmatter.js'
+import { detectBrokerage, type BrokerageReport } from '../../core/cognition/brokerage.js'
 import {
   detectEarlyWarning,
   type EarlyWarningReport,
@@ -281,6 +286,12 @@ const DEFAULT_DARKMATTER_LIMIT = 20
 
 /** 知识暗物质最大返回条数。 */
 const MAX_DARKMATTER_LIMIT = 50
+
+/** 结构洞掮客缺省返回条数（轴线 36）。 */
+const DEFAULT_BROKERAGE_LIMIT = 15
+
+/** 结构洞掮客最大返回条数。 */
+const MAX_BROKERAGE_LIMIT = 50
 
 /** 实体倒排记录（knowledge-entities 表 `e/` 前缀键的值形状）。 */
 interface EntityRecord {
@@ -1106,9 +1117,21 @@ export function apply(ctx: Context): void {
     return detectDarkMatter(entityGraphOf(), { topK: limit })
   }
 
+  /** 结构洞掮客视图（轴线 36）：大陆同源 Louvain 分组 + Burt 结构洞/掮客检测。 */
+  function brokerageView(limit: number): BrokerageReport {
+    const graph = entityGraphOf()
+    const communities = detectCommunities(graph)
+    const groups = new Map<string, number>()
+    for (const community of communities.communities) {
+      for (const entity of community.entities) groups.set(entity.key, community.id)
+    }
+    return detectBrokerage(graph, { topK: limit, groups })
+  }
+
   /**
-   * 模块 F 主动脉搏（轴线 18 的信号源扩展：
-   * 意图 + 复习 + 片段 + 元认知三轴[遗忘预测/节律/负荷]）。
+   * 模块 F 主动脉搏（轴线 18 的信号源扩展：意图 + 复习 + 片段 +
+   * 元认知三轴[遗忘预测/节律/负荷] + 漂移[轴 30] + 固化[轴 31] +
+   * 回声[轴 33] + 临界预警[轴 35]）。
    */
   async function knowledgePulse(): Promise<PulseReport> {
     const episodes = loadEpisodes()
@@ -1131,6 +1154,7 @@ export function apply(ctx: Context): void {
     const driftReport = await driftView(DEFAULT_DRIFT_LAMBDA)
     const consolidationReport = consolidationView()
     const radarReport = await radarView(DEFAULT_RADAR_DAYS)
+    const earlyWarningReport = await earlyWarningView(DEFAULT_EW_BASELINE)
     return composePulse(
       [
         () => dueIntentionInsights(dueIntentionList.due),
@@ -1179,6 +1203,7 @@ export function apply(ctx: Context): void {
             recentTotal: radarReport.recentTotal,
             medianRecurrenceDays: radarReport.medianRecurrenceDays,
           }),
+        () => earlyWarningInsights(earlyWarningReport),
       ],
       Date.now(),
     )
@@ -1514,6 +1539,21 @@ export function apply(ctx: Context): void {
         sendJson(res, 200, darkMatterView(limit))
       }),
     'companion.knowledge-http-darkmatter',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/knowledge/brokerage', async (_req, res, { query }) => {
+        await ctx.companion.ready
+        await syncKnowledge(false)
+        const limit = parseLimitParam(
+          query.get('limit') ?? undefined,
+          DEFAULT_BROKERAGE_LIMIT,
+          MAX_BROKERAGE_LIMIT,
+        )
+        sendJson(res, 200, brokerageView(limit))
+      }),
+    'companion.knowledge-http-brokerage',
   )
 
   // ------------------------------------------------------------------
@@ -2299,6 +2339,69 @@ export function apply(ctx: Context): void {
         },
       }),
     'companion.knowledge-command-darkmatter',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'brokerage',
+        description: '结构洞掮客：识别承载跨域翻译的桥梁实体（Burt 2004 结构洞 + Gould-Fernandez 角色，轴线 36）',
+        input: { hint: '[limit]（缺省 15）' },
+        handler: async (invocation: CommandInvocation): Promise<CommandResult> => {
+          const arg = (invocation.rawInput ?? '').trim()
+          let limit = DEFAULT_BROKERAGE_LIMIT
+          if (arg.length > 0) {
+            const parsed = Number(arg)
+            if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_BROKERAGE_LIMIT) {
+              return {
+                kind: 'error',
+                text: `limit 必须是 [1, ${MAX_BROKERAGE_LIMIT}] 内的整数`,
+              }
+            }
+            limit = parsed
+          }
+          try {
+            await ctx.companion.ready
+            await syncKnowledge(false)
+            const report = brokerageView(limit)
+            if (report.brokers.length === 0) {
+              return { kind: 'success', text: report.summary }
+            }
+            const lines: string[] = ['结构洞掮客报告（Burt 2004 / Gould-Fernandez 1989）：', '']
+            lines.push(
+              `  图规模：${report.graph.nodes} 实体、${report.graph.edges} 条共现边、` +
+                `${report.groupCount} 块大陆；掮客候选 ${report.candidates} 个` +
+                (report.budgetExhausted ? '（已达扫描预算，结果为下界）' : ''),
+            )
+            lines.push('')
+            lines.push('桥梁实体（按掮客分降序——洞分 50% + 跨域占比 30% + 中介规模 20%）：')
+            for (const broker of report.brokers) {
+              lines.push(
+                `  ◆ ${broker.name}（掮客分 ${(broker.score * 100).toFixed(0)}%，` +
+                  `约束 ${broker.constraint.toFixed(2)}，有效规模 ${broker.effectiveSize.toFixed(1)}/${broker.degree}）`,
+              )
+              lines.push(
+                `    跨域中介 ${broker.crossGroupPairs}/${broker.totalPairs}（联络 ${broker.roles.liaison}／` +
+                  `顾问 ${broker.roles.consultant}／代表 ${broker.roles.representative}／` +
+                  `守门 ${broker.roles.gatekeeper}／协调 ${broker.roles.coordinator}）`,
+              )
+            }
+            lines.push('')
+            lines.push(`  ${report.summary}`)
+            lines.push('')
+            lines.push(
+              '提示：掮客实体是跨域翻译的枢纽——它们被遗忘，两块大陆随之失联；值得优先巩固（forecast / review）',
+            )
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: error instanceof HttpError ? error.message : '结构洞掮客分析失败，请稍后重试',
+            }
+          }
+        },
+      }),
+    'companion.knowledge-command-brokerage',
   )
 }
 

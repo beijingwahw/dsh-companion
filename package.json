@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Companion — DeepSeek Harness 官方伴侣插件：对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、本地语义检索、对话知识资产、跨会话知识合成。",
   "license": "MIT",
   "type": "module",

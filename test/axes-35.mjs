@@ -2,10 +2,12 @@
  * 轴线 35 算法冒烟测试（驱动 lib/ 编译产物，ESM）。
  * 覆盖：cognition/earlywarning（临界预警：新奇度序列的临界慢化先行
  * 信号——AR(1) 持续性 + 方差发散 + 漂移斜率三证据融合、分级、
- * 跳变与慢化的概念区分、确定性）。
+ * 跳变与慢化的概念区分、确定性）与主动脉搏接线
+ * （insights/pulse 的 earlywarning 分类，对齐 0.4.0 回声脉搏模式）。
  */
 import assert from 'node:assert/strict'
 import { detectEarlyWarning } from '../lib/core/cognition/earlywarning.js'
+import { earlyWarningInsights } from '../lib/core/insights/pulse.js'
 
 let passed = 0
 function ok(label, fn) {
@@ -152,6 +154,51 @@ ok('确定性：同输入两次运行 deepEqual', () => {
     detectEarlyWarning(approaching),
     detectEarlyWarning(approaching),
   )
+})
+
+// --------------------------------------------------------------------
+// 主动脉搏接线（轴线 35 → 轴线 18，对齐 0.4.0 回声脉搏模式）：
+// warning → critical 卡（先行信号已共现 + 交接指引），
+// watch → watch 卡，calm / insufficient 静默（推送克制）。
+// --------------------------------------------------------------------
+ok('warning 报告 → earlywarning 分类 critical 卡（行动指向交接）', () => {
+  const cards = earlyWarningInsights(warningReport)
+  assert.equal(cards.length, 1)
+  assert.equal(cards[0].category, 'earlywarning')
+  assert.equal(cards[0].severity, 'critical')
+  assert.ok(cards[0].text.includes(`${warningReport.unitCount}`))
+  assert.ok(cards[0].text.includes(warningReport.score.toFixed(2)))
+  assert.ok(cards[0].action.includes('交接'))
+  assert.ok(cards[0].source.includes('轴 35'))
+})
+ok('watch 级 → watch 卡（临界慢化迹象知会）', () => {
+  const cards = earlyWarningInsights({
+    level: 'watch',
+    score: 0.42,
+    unitCount: 80,
+    seriesLength: 74,
+    ar1Delta: 0.31,
+    varianceRatio: 2.1,
+    returnRate: 0.35,
+  })
+  assert.equal(cards.length, 1)
+  assert.equal(cards[0].category, 'earlywarning')
+  assert.equal(cards[0].severity, 'watch')
+  assert.ok(cards[0].text.includes('临界慢化'))
+  assert.ok(cards[0].action.includes('earlywarning'))
+})
+ok('calm / insufficient 静默（预警未到值得打扰的程度不开口）', () => {
+  const calmStats = {
+    level: 'calm',
+    score: calmReport.score,
+    unitCount: calmReport.unitCount,
+    seriesLength: calmReport.seriesLength,
+    ar1Delta: calmReport.ar1Delta,
+    varianceRatio: calmReport.varianceRatio,
+    returnRate: calmReport.returnRate,
+  }
+  assert.deepEqual(earlyWarningInsights(calmStats), [])
+  assert.deepEqual(earlyWarningInsights({ ...calmStats, level: 'insufficient' }), [])
 })
 
 console.log(`全部通过：${passed} 项断言`)

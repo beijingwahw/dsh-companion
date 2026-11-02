@@ -260,8 +260,10 @@ export function apply(ctx: Context): void {
 - `GET  /knowledge/pulse` → `{ cards, summary, generatedAt }`
   认知脉搏（轴线 18 的认知信号源）：到期意图（critical/watch）、到期复习、片段资产
   （空库/积累中/跨域就绪三态）、遗忘预测（critical/watch/info/静默四态）、记忆节律
-  （显著偏离才播报，冷启动静默）、认知负荷（仅顺延发生时开口）六类信号提供者，
-  与检索侧脉搏在客户端合并。
+  （显著偏离才播报，冷启动静默）、认知负荷（仅顺延发生时开口）、主题漂移（轴线 30）、
+  记忆固化（轴线 31）、回声雷达（轴线 33，模板级才 watch）、临界预警（轴线 35：
+  warning → critical 卡附模块 B 交接指引 / watch → watch 卡 / 平静与样本不足静默）
+  十类信号提供者，与检索侧脉搏在客户端合并。
 - `GET  /knowledge/forecast` → `{ now, ease, critical: ForgettingForecast[], warning: ForgettingForecast[], criticalCount, warningCount, stableCount, summary }`
   遗忘预测引擎（轴线 23）：为全库每条片段计算连续保持率 `R(t) = exp(-t/S)`——
   稳定性 S = 档位间隔 × 当前节律 ease × 标定因子 `1/-ln(0.7)`（保证到期时刻的
@@ -338,7 +340,22 @@ export function apply(ctx: Context): void {
   AR(1)（距临界点距离，[0,2]）。序列 < 40 点或全程零方差 → `insufficient`
   平凡报告。`baseline` ∈ [8, 64] 整数（非法 `400`）；`novelty` 携带近端
   64 点供迷你图。watch/warning 附 `advice`（warning 指向模块 B 交接摘要
-  ——趁注意力盆地切换前存档上下文）。
+  ——趁注意力盆地切换前存档上下文）。watch/warning 级同时作为主动脉搏
+  `earlywarning` 分类信号源（对齐 0.4.0 回声脉搏模式：warning → critical
+  卡、watch → watch 卡、平静静默）。
+- `GET  /knowledge/brokerage?limit=15` → `{ graph: { nodes, edges }, groupCount, candidates, budgetExhausted, brokers: [{ key, name, type, degree, effectiveSize, efficiency, constraint, roles: { coordinator, consultant, representative, gatekeeper, liaison }, totalPairs, crossGroupPairs, crossShare, score, interpretation }], summary }`
+  结构洞掮客（轴线 36，Burt 2004）：识别承载**跨域翻译**的桥梁实体。
+  两套互补测量——**Burt 结构洞**：网络约束 `C_i = Σ_j (p_ij + Σ_q p_iq·p_qj)²`
+  （p 为边权行归一；低约束 = 跨结构洞）、有效规模（Burt 冗余折扣，m 排除
+  回指边）与效率；**Gould-Fernandez 五角色**（1989）：以轴线 26 同源 Louvain
+  大陆为分组，掮客的全部有序接触对 (j→k) 分五类——协调（三方同组）/
+  顾问（j、k 同组，i 异组）/ 代表（i、j 同组，k 异组）/ 守门（i、k 同组，
+  j 异组；无向图上与代表互为镜像）/ 联络（三方三组——纯跨域桥）。
+  掮客分 = 0.5 × 洞分（约束倒序归一）+ 0.3 × 跨域占比（非协调对）+
+  0.2 × 规模分（log 中介对量）——「跨得开」与「扛得起」同时要求。
+  候选须度数 ≥ 2；中介对展开预算熔断（缺省 500k）；分组缺省单组
+  （跨域角色退化，报告 `groupCount` 标注）。与轴线 34 分工：暗物质预测
+  缺失边，掮客识别**已经在承载跨域流量**的实体。`limit` ∈ [1, 50]。
 
 ### 模块 G（synthesis）
 - `POST /synthesis/preview` `{ question }` → `{ question, evidence: [{ index, sessionId, title?, createdAt, score, snippet }], sources, coverage, stats: { candidates, chunks, evidenceChunks, evidenceChars, estimatedPromptTokens }, note }`
@@ -409,6 +426,8 @@ export function apply(ctx: Context): void {
 | `earlywarning` | F | 临界预警：新奇度临界慢化先行信号——AR(1)/方差/斜率三证据
   （轴线 35，本地计算；input: `[baseline]` ∈ [8, 64]，缺省 16；warning
   建议为当前主题生成交接摘要） |
+| `brokerage` | F | 结构洞掮客：识别承载跨域翻译的桥梁实体——Burt 网络约束 +
+  Gould-Fernandez 五角色（轴线 36，本地计算；input: `[limit]`，缺省 15） |
 | `research` | G | 跨会话深度研究（input: `<研究问题>`；块级检索历史对话并合成
   带 `[编号]` 引用来源的回答，附证据来源列表） |
 

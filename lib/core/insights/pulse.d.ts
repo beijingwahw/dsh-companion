@@ -20,7 +20,7 @@
  * 同一时刻的两次调用产生相同结果（可测试性）。
  */
 /** 洞察分类（决定展示分组与图标语义）。 */
-export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo';
+export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo' | 'earlywarning';
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info';
 /** 单条洞察卡片。 */
@@ -131,4 +131,14 @@ export declare function echoRadarInsights(stats: {
     recentEchoes: number;
     recentTotal: number;
     medianRecurrenceDays: number | null;
+}): readonly InsightCard[];
+/** 临界预警信号 → 洞察卡片（轴线 35：注意力相变的先行播报）。 */
+export declare function earlyWarningInsights(report: {
+    level: 'insufficient' | 'calm' | 'watch' | 'warning';
+    score: number;
+    unitCount: number;
+    seriesLength: number;
+    ar1Delta: number;
+    varianceRatio: number;
+    returnRate: number;
 }): readonly InsightCard[];

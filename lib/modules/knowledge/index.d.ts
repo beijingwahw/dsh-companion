@@ -44,21 +44,24 @@
  *   （认知总览：意图 + 复习 + 元认知三轴）、`GET /knowledge/intentions`
  *   （意图清单）、`POST /knowledge/review/grade`（复习评分 + 节律更新）、
  *   `GET /knowledge/analogy?q=`（类比检索）、`GET /knowledge/pulse`
- *   （模块 F 主动洞察：意图/复习/片段/预测/节律/负荷/漂移/固化八类
- *   信号源）、`GET /knowledge/forecast`（遗忘预测报告）、
+ *   （模块 F 主动洞察：意图/复习/片段/预测/节律/负荷/漂移/固化/回声/
+ *   预警十类信号源）、`GET /knowledge/forecast`（遗忘预测报告）、
  *   `GET /knowledge/rhythm`（记忆节律画像）、`GET /knowledge/load?cap=`
  *   （今日负荷计划）、`GET /knowledge/continents`（知识大陆：Louvain
  *   社区发现）、`GET /knowledge/starmap?q=`（星图导航：个性化
  *   PageRank）、`GET /knowledge/drift?lambda=`（主题漂移：BOCPD 变点
  *   分段）、`GET /knowledge/consolidation`（记忆固化：MinHash-LSH
  *   近重复聚类）、`GET /knowledge/earlywarning?baseline=`（临界预警：
- *   新奇度序列临界慢化先行信号，轴线 35）；
+ *   新奇度序列临界慢化先行信号，轴线 35）、`GET /knowledge/brokerage`
+ *   （结构洞掮客：Burt 网络约束 + Gould-Fernandez 五角色识别跨域
+ *   翻译桥梁实体，轴线 36）；
  * - 命令 `insight`：知识资产文本报告；`todo`：到期意图；`review`：
  *   今日分诊后的复习安排（`review <片段ID> ok|no` 评分）；
  *   `analogy <问题描述>`：同构经验检索；`forecast`：遗忘预测体检；
  *   `rhythm`：记忆节律报告；`continents`：知识大陆速览；
  *   `starmap <查询>`：星图导航；`drift`：主题漂移报告；
- *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）。
+ *   `consolidate`：记忆固化报告；`earlywarning`：临界预警报告（先行信号）；
+ *   `brokerage`：结构洞掮客报告（跨域桥梁实体）。
  *
  * 索引持久化：companion 域 `knowledge-entities` 表——
  * - 键 `v/<sessionId>` → 已分析版本（updatedAt 快照，漂移检测基准）；
