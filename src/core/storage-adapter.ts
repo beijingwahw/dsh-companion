@@ -72,8 +72,8 @@ function toUnitName(name: string): string {
 // 插件使用的全部表名清单（用于 defineDomain 声明）
 // ---------------------------------------------------------------------------
 
-/** 插件所有模块使用的表名（连字符形式）。 */
-const ALL_TABLE_NAMES = [
+/** 插件所有模块使用的表名（连字符形式）；导出供发布契约测试做静态守卫。 */
+export const ALL_TABLE_NAMES = [
   // core
   'vault-meta', 'vault', 'usage-daily',
   // handoff
@@ -89,8 +89,14 @@ const ALL_TABLE_NAMES = [
   'retrieval-feedback',
   // retrieval（轴线 19：零命中查询日志——检索盲区分析的原料）
   'retrieval-misses',
+  // retrieval（轴线 28：FTRL-Proximal 在线排序模型）
+  'retrieval-ranker',
   // knowledge（轴线 4：对话知识资产实体倒排索引）
   'knowledge-entities',
+  // knowledge（轴线 20–25：意图、片段、复习调度与个体节律）
+  'knowledge-intentions', 'knowledge-episodes', 'knowledge-review', 'knowledge-rhythm',
+  // insights（仅存指纹与反馈元数据，不保存卡片正文）
+  'proactive-insights',
   // trace
   'traces', 'trace-stats-daily',
   // prompt
@@ -168,16 +174,17 @@ function serializeWrite<T>(key: string, job: () => Promise<T>): Promise<T> {
 }
 
 /** 将真实 KvTable 包装为插件期望的 KvTable 接口。 */
-function wrapTable<V>(real: RealKvTable<string, unknown>): KvTable<V> {
+function wrapTable<V>(real: RealKvTable<string, unknown>, namespace: string): KvTable<V> {
+  const queueKey = (key: string): string => `${namespace}:${key}`
   return {
     get: (key) => real.get(key) as V | undefined,
     keys: () => [...real.keys()],
     entries: () => [...real.entries()] as [string, V][],
     get size() { return real.size },
-    put: (key, value) => serializeWrite(key, () => real.put(key, value)),
-    delete: (key) => serializeWrite(key, async () => { await real.delete(key) }),
+    put: (key, value) => serializeWrite(queueKey(key), () => real.put(key, value)),
+    delete: (key) => serializeWrite(queueKey(key), async () => { await real.delete(key) }),
     update: (key, fn) =>
-      serializeWrite(key, async () => {
+      serializeWrite(queueKey(key), async () => {
         // 队首执行：此刻的同步读即权威内存状态，并发调用不会互相覆盖。
         const current = real.get(key) as V | undefined
         const next = fn(current)
@@ -201,7 +208,7 @@ function wrapDomain(real: RealDomain<RealDomainSpec>, spec: DomainSpec): Domain 
     spec,
     table<V>(name: string): KvTable<V> {
       if (!tableCache.has(name)) {
-        tableCache.set(name, wrapTable<V>(real.table(toUnitName(name))))
+        tableCache.set(name, wrapTable<V>(real.table(toUnitName(name)), `${spec.name}/${name}`))
       }
       return tableCache.get(name) as KvTable<V>
     },

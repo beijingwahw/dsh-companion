@@ -50,17 +50,22 @@ export interface ArmOptions {
 export declare class ArmedStore {
     private readonly table;
     private readonly receipts;
+    /** 进程内单调世代：同一毫秒连续 re-arm 也不能复用 pendingArmedAt。 */
+    private lastArmedAt;
     /** 在已打开的 companion 存储域上创建。 */
     constructor(domain: Domain);
     /**
      * 武装摘要；sessionId 为 null 时武装给下一个新对话（pending，同键覆盖）。
      * pending 武装可携带世代快照与有效期（详见文件头注释）。
      */
-    arm(sessionId: string | null, summary: string, options?: ArmOptions): Promise<void>;
+    arm(sessionId: string | null, summary: string, options?: ArmOptions): Promise<ArmedRecord>;
     /** 解除武装；sessionId 为 null 时解除 pending。不存在时静默成功。 */
     disarm(sessionId: string | null): Promise<void>;
-    /** 作废过期的 pending 武装（装配回调发现超时后调用）。 */
-    expirePending(): Promise<void>;
+    /** 按世代作废过期 pending；旧过期回调不得删除刚重新武装的新记录。 */
+    expirePending(expect?: {
+        armedAt: number;
+        summary: string;
+    }): Promise<void>;
     /** 列出当前全部武装（同步读）；特定会话按武装时间升序，pending 排在最后。 */
     list(): ArmedEntry[];
     /** 读取 pending 武装记录（同步读）；不存在返回 undefined。 */

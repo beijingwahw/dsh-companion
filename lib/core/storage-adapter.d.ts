@@ -43,6 +43,8 @@ export interface DomainFacility {
     get(name: string): Domain | undefined;
     closeAll(): Promise<void>;
 }
+/** 插件所有模块使用的表名（连字符形式）；导出供发布契约测试做静态守卫。 */
+export declare const ALL_TABLE_NAMES: readonly ["vault-meta", "vault", "usage-daily", "templates", "handoff-armed", "handoff-receipts", "handoff-chunks", "handoff-lineage", "cost-extra", "budget-state", "tags", "retrieval-index", "retrieval-feedback", "retrieval-misses", "retrieval-ranker", "knowledge-entities", "knowledge-intentions", "knowledge-episodes", "knowledge-review", "knowledge-rhythm", "proactive-insights", "traces", "trace-stats-daily", "prompt-versions", "prompt-templates", "prompt-ratings", "pipelines", "pipeline-runs", "queue-tasks", "scheduled-jobs", "scheduled-runs", "team-prefs", "team-snapshots", "experience-cards", "review-requests", "review-comments", "review-decisions", "named-keys", "audit-log", "dlp-rules", "dlp-builtin-overrides", "dlp-settings", "dlp-blocks-daily", "audit-alerts"];
 /**
  * 声明存储域规格。内部将所有表以 z.unknown() schema 注册到真实 DomainSpec，
  * 使 Harness 存储层能正确打开域。插件自行负责记录级校验。

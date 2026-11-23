@@ -224,12 +224,13 @@ export function apply(ctx: Context): void {
   /** FTRL-Proximal 在线排序模型（内存权威状态；写穿回 rankerTable）。 */
   let rankerModel: RankerModel = emptyRankerModel()
   /**
-   * 最近一次检索的呈现上下文（轴线 28 训练原料）：
-   * 点击发生时，排在点击项之上的未点击项即 skip-above 负例。
+   * 最近检索的呈现上下文（按查询做 LRU，轴线 28 训练原料）：
+   * 用户打开旧结果或穿插其他搜索后，点击仍能匹配正确呈现序。
    */
-  let lastSearchContext:
-    | { query: string; entries: ReadonlyArray<{ sessionId: string; features: RankerFeatures }> }
-    | undefined
+  const searchContexts = new Map<
+    string,
+    { entries: ReadonlyArray<{ sessionId: string; features: RankerFeatures }> }
+  >()
   /** 最近一次对账完成时间（节流基准）。 */
   let lastSyncAt = 0
   /** 在途对账 promise（并发检索去重，只跑一次）。 */
@@ -337,6 +338,7 @@ export function apply(ctx: Context): void {
         updated += 1
       }
       lastSyncAt = Date.now()
+      if (updated > 0 || removed > 0) ctx.companion.insights.invalidate()
       return { indexed: index.size, updated, removed }
     })()
     try {
@@ -471,9 +473,12 @@ export function apply(ctx: Context): void {
         const doc = index.get(hit.sessionId)
         if (doc !== undefined) vectors.set(hit.sessionId, docGramVector(doc))
       }
+      // RRF 分与余弦相似度量纲不同：先以本轮最高分归一，避免 MMR 退化成
+      // “首选最高分，其后几乎只看最不相似”。
+      const topScore = Math.max(pool[0]?.score ?? 0, Number.EPSILON)
       ordered = mmrSelect(
         pool,
-        (hit) => hit.score,
+        (hit) => Math.max(0, hit.score / topScore),
         (a, b) => {
           const va = vectors.get(a.sessionId)
           const vb = vectors.get(b.sessionId)
@@ -513,7 +518,12 @@ export function apply(ctx: Context): void {
       })
     }
     if (contextEntries.length > 0) {
-      lastSearchContext = { query: params.query.trim(), entries: contextEntries }
+      const contextQuery = params.query.trim()
+      searchContexts.delete(contextQuery)
+      searchContexts.set(contextQuery, { entries: contextEntries })
+      // 有界 LRU：保留最近 20 个查询，避免长期会话中无界积累特征快照。
+      const oldest = searchContexts.keys().next()
+      if (searchContexts.size > 20 && !oldest.done) searchContexts.delete(oldest.value)
     }
     // 头部命中补摘要片段：并行读取原文定位最佳窗口（片段高亮仍按用户
     // 原始查询词，不掺扩展词）；失败静默降级为无片段。
@@ -609,6 +619,7 @@ export function apply(ctx: Context): void {
       lastAt: now,
     }
     misses.set(query, next)
+    ctx.companion.insights.invalidate()
     void missesTable?.put(query, next).catch(() => undefined)
   }
 
@@ -664,11 +675,12 @@ export function apply(ctx: Context): void {
     await ctx.companion.ready
     const next = recordClick(profiles.get(sessionId), queryText, Date.now())
     profiles.set(sessionId, next)
+    ctx.companion.insights.invalidate()
     // 写穿失败不回滚内存（下次点击会再写；画像可重建，非关键数据）。
     await feedbackTable?.put(sessionId, next).catch(() => undefined)
-    // 轴线 28：偏好对训练（仅当点击来自最近一次检索的呈现序）。
-    const context = lastSearchContext
-    if (context && context.query === queryText.trim()) {
+    // 轴线 28：按点击查询匹配最近 20 次呈现序，不再被后续搜索静默冲掉。
+    const context = searchContexts.get(queryText.trim())
+    if (context) {
       const position = context.entries.findIndex((entry) => entry.sessionId === sessionId)
       if (position >= 0) {
         let model = updateRanker(rankerModel, context.entries[position].features, 1)
@@ -701,6 +713,12 @@ export function apply(ctx: Context): void {
     const clusters = clusterSessions(all).filter((cluster) => cluster.size >= minSize)
     return { sessions: all.length, clusters }
   }
+
+  // 注册到统一主动智能中心；旧 GET /retrieval/insights 仍复用同一纯合成函数。
+  ctx.effect(
+    () => ctx.companion.insights.register(async () => (await pulse()).cards),
+    'companion.retrieval-insight-provider',
+  )
 
   // ------------------------------------------------------------------
   // HTTP 端点（注册即 effect）

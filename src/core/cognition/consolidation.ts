@@ -83,7 +83,9 @@ export interface ConsolidationPlan {
 
 /** 两个 token 集合的真实 Jaccard 相似度。 */
 export function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
-  if (a.size === 0 && b.size === 0) return 1
+  // 两个空集合没有可比较的支撑集——按不相似处理（返回 1 会让
+  // 空文本在 LSH 候选验证中误判为近重复而抱团成簇）。
+  if (a.size === 0 && b.size === 0) return 0
   let inter = 0
   for (const term of a) {
     if (b.has(term)) inter += 1
@@ -124,7 +126,7 @@ export function estimatedJaccard(a: ReadonlyArray<number>, b: ReadonlyArray<numb
 /**
  * 记忆固化主入口：近重复检测 + 聚类 + 固化计划。
  *
- * @param items 记忆项（任意顺序；内部按 id 稳定排序）。
+ * @param items 记忆项（任意顺序；内部按时间近端优先截断、id 兜底稳定排序）。
  * @param options 配置（见 ConsolidationOptions）。
  */
 export function consolidateMemories(
@@ -137,7 +139,12 @@ export function consolidateMemories(
   const size = Math.max(bands * rows, options.signatureSize ?? bands * rows)
   const maxItems = Math.max(10, options.maxItems ?? 5000)
 
-  const ordered = [...items].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  // 近端优先截断：按时间升序排，slice(-maxItems) 保留最近的项；
+  // at 缺失视为 0（最旧，先被截掉），同时间按 id 字典序兜底确定性。
+  const ordered = [...items].sort(
+    (a, b) =>
+      (a.at ?? 0) - (b.at ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )
   const pool = ordered.slice(-maxItems)
   const n = pool.length
   if (n < 2) return emptyPlan(n)

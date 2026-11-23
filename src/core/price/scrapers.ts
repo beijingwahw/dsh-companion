@@ -94,6 +94,40 @@ export function toGrid(rows: RawCell[][]): string[][] {
 }
 
 /**
+ * 单价的合理性上限（元/百万 tokens）。国产厂商官方刊例价最高约 ¥120/百万，
+ * 上限留近 10 倍余量；超过即视为解析串扰或异常数据，绝不当有效官方计价。
+ */
+export const MAX_PLAUSIBLE_PRICE = 1_000
+
+/** 单价在数值与业务上是否合理：有限、非负、未超离谱上限。 */
+export function isSanePrice(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= MAX_PLAUSIBLE_PRICE
+}
+
+/** parsePriceCell 的 fail-closed 变体：不合理数值视同未识别（undefined）。 */
+function parseSanePriceCell(text: string): number | undefined {
+  const value = parsePriceCell(text)
+  return value !== undefined && isSanePrice(value) ? value : undefined
+}
+
+/**
+ * 对实时解析出的价格表做 fail-closed 校验：丢弃任何字段缺失、非有限、
+ * 为负或离谱偏大的条目。全部被丢弃时返回空表（调用方沿用现有价格）。
+ */
+export function sanitizeLiveTable(table: PriceTable): PriceTable {
+  const out: PriceTable = {}
+  // 防御性入参校验：JSON 反序列化等外部来源可能给出非对象。
+  if (typeof table !== 'object' || table === null || Array.isArray(table)) return out
+  for (const [model, price] of Object.entries(table)) {
+    if (typeof price !== 'object' || price === null || Array.isArray(price)) continue
+    const { inputCacheHit, inputMiss, output } = price
+    if (!isSanePrice(inputCacheHit) || !isSanePrice(inputMiss) || !isSanePrice(output)) continue
+    out[model] = { inputCacheHit, inputMiss, output }
+  }
+  return out
+}
+
+/**
  * 解析单个价格单元格为 元/百万 tokens。
  * "免费" → 0；美元单元格 → undefined（不支持，调用方回退）。
  */
@@ -150,7 +184,7 @@ function parseRowLayout(grid: string[][], idRe: RegExp, table: PriceTable): void
       let output: number | undefined
       let cacheHit: number | undefined
       for (const [col, kind] of kindCols) {
-        const value = parsePriceCell(row[col] ?? '')
+        const value = parseSanePriceCell(row[col] ?? '')
         if (value === undefined) continue
         if (kind === 'inputMiss') inputMiss ??= value
         else if (kind === 'output') output ??= value
@@ -172,16 +206,30 @@ function parseColumnLayout(grid: string[][], idRe: RegExp, table: PriceTable): v
     if (match !== null && match[1] !== undefined) modelCols.push([col, match[1].toLowerCase()])
   })
   if (modelCols.length === 0) return
+  // 行布局已完整解析的模型不在本布局的缺字段清理范围内。
+  const prefilled = new Set(Object.keys(table))
+  // 显式跟踪每模型已见的价格类型：0 可能是真实的"免费"价，不能再当"未填"哨兵。
+  const seen = new Map<string, Set<keyof ModelPrice>>()
   for (const row of grid.slice(1)) {
     const kind = kindOf(row[0] ?? '')
     if (kind === undefined) continue
     for (const [col, model] of modelCols) {
-      const value = parsePriceCell(row[col] ?? '')
+      const value = parseSanePriceCell(row[col] ?? '')
       if (value === undefined) continue
+      const kinds = seen.get(model) ?? new Set<keyof ModelPrice>()
+      if (kinds.has(kind)) continue // 保留首个（最低）档位
       const existing = table[model] ?? { inputCacheHit: 0, inputMiss: 0, output: 0 }
-      if (existing[kind] === 0) existing[kind] = value
+      existing[kind] = value
+      kinds.add(kind)
+      seen.set(model, kinds)
       table[model] = existing
     }
+  }
+  // 输入/输出价缺一即视为残缺条目（如页面被截断只剩缓存行），整条丢弃，
+  // 绝不把缺字段按 0 元当成有效官方计价；缓存命中价可缺省（按 0 计）。
+  for (const [model, kinds] of seen) {
+    if (prefilled.has(model)) continue
+    if (!kinds.has('inputMiss') || !kinds.has('output')) delete table[model]
   }
 }
 
@@ -223,6 +271,8 @@ export function parseErnieSheet(html: string): PriceTable {
     const priceCol = find(/在线推理/)
     const unitCol = find(/单位/)
     if (modelCol < 0 || kindCol < 0 || priceCol < 0) continue
+    // 显式跟踪已见价格类型：0 可能是真实"免费"价，不能当"未填"哨兵。
+    const seen = new Map<string, Set<keyof ModelPrice>>()
     for (const row of grid.slice(1)) {
       const unit = unitCol >= 0 ? (row[unitCol] ?? '') : ''
       if (!/tokens/i.test(unit)) continue // 跳过 按图/按秒/GB 行
@@ -234,16 +284,25 @@ export function parseErnieSheet(html: string): PriceTable {
       else if (kindText.includes('输出')) kind = 'output'
       else if (kindText.includes('输入')) kind = 'inputMiss'
       if (kind === undefined) continue
-      const value = parsePriceCell(row[priceCol] ?? '')
-      if (value === undefined) continue
+      const value = parseSanePriceCell(row[priceCol] ?? '')
+      // 千 tokens 换算后超上限同样视为异常（如串列导致的离谱数值）。
+      if (value === undefined || !isSanePrice(value * scale)) continue
       // 一行可能列出多个共享同一价格的版本名。
       for (const rawId of (row[modelCol] ?? '').split(/\s+/)) {
         const model = rawId.trim().toLowerCase()
         if (!/^ernie[\w.-]*$/.test(model)) continue
+        const kinds = seen.get(model) ?? new Set<keyof ModelPrice>()
+        if (kinds.has(kind)) continue // 保留首个（最低）档位
         const existing = table[model] ?? { inputCacheHit: 0, inputMiss: 0, output: 0 }
-        if (existing[kind] === 0) existing[kind] = value * scale
+        existing[kind] = value * scale
+        kinds.add(kind)
+        seen.set(model, kinds)
         table[model] = existing
       }
+    }
+    // 输入/输出价缺一的残缺条目（如 page-data 截断）整条丢弃，不按 0 元计价。
+    for (const [model, kinds] of seen) {
+      if (!kinds.has('inputMiss') || !kinds.has('output')) delete table[model]
     }
   }
   return table
@@ -268,11 +327,12 @@ export function parseZhipuBundleSheet(js: string): PriceTable {
     if (!/^glm[\w.-]*$/.test(model)) continue
     if (table[model] !== undefined) continue // 保留首个（最低）档位
     const hitMatch = match[0].match(/hit:\["(?:(\d+(?:\.\d+)?)元|免费)"\]/)
-    table[model] = {
-      inputCacheHit: Number(hitMatch?.[1] ?? 0),
-      inputMiss: Number(match[2] ?? 0),
-      output: Number(match[3] ?? 0),
-    }
+    // 位数不受限的数字可能溢出为 Infinity 或离谱值（串扰/异常数据），整条丢弃。
+    const hit = Number(hitMatch?.[1] ?? 0)
+    const miss = Number(match[2] ?? 0)
+    const out = Number(match[3] ?? 0)
+    if (!isSanePrice(hit) || !isSanePrice(miss) || !isSanePrice(out)) continue
+    table[model] = { inputCacheHit: hit, inputMiss: miss, output: out }
   }
   return table
 }
@@ -314,7 +374,7 @@ export function parseZhipuLegacySheet(jsonText: string): PriceTable {
         if (!/^glm[\w.-]*$/.test(model)) continue
         const cell = row[priceCode] ?? ''
         if (!/免费|百万\s*tokens/i.test(cell)) continue // 跳过 元/张、元/万字符 等
-        const value = parsePriceCell(cell)
+        const value = parseSanePriceCell(cell)
         if (value === undefined || table[model] !== undefined) continue
         // "输入：16元/百万 tokens…；输出：不计费" 类单元格输出记 0。
         const output = /输出[：:]\s*不计费/.test(cell) ? 0 : value
@@ -371,10 +431,10 @@ export function parseDoubaoSheet(markdown: string): PriceTable {
       // 空单元格 = 前一模型的延续档位；seedance 为视频系列（章节过滤已排除，双重保险）。
       if (!model.startsWith('doubao') || model.includes('seedance')) continue
       if (table[model] !== undefined) continue
-      const inputMiss = parsePriceCell(row[inputCol] ?? '')
-      const output = parsePriceCell(row[outputCol] ?? '')
+      const inputMiss = parseSanePriceCell(row[inputCol] ?? '')
+      const output = parseSanePriceCell(row[outputCol] ?? '')
       if (inputMiss === undefined || output === undefined) continue
-      const hit = hitCol >= 0 ? parsePriceCell(row[hitCol] ?? '') : undefined
+      const hit = hitCol >= 0 ? parseSanePriceCell(row[hitCol] ?? '') : undefined
       table[model] = { inputCacheHit: hit ?? 0, inputMiss, output }
     }
   }
@@ -408,7 +468,7 @@ export function parseKimiSheet(rscText: string): PriceTable {
       const price: ModelPrice = { inputCacheHit: 0, inputMiss: 0, output: 0 }
       let priced = false
       for (const [col, kind] of kindByCol) {
-        const value = parsePriceCell(cells[col] ?? '')
+        const value = parseSanePriceCell(cells[col] ?? '')
         if (value !== undefined) {
           price[kind] = value
           priced = true

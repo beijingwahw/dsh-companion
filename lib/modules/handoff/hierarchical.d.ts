@@ -1,17 +1,3 @@
-/**
- * 分层摘要引擎（轴线 2：map-reduce 上下文工程）。
- *
- * 突破单次 prompt 的字符预算限制：超长对话不再「保首尾截中段」（旧策略
- * 丢弃中段信息），而是——
- * - **map**：按轮次边界切分为多个 ≤ 预算的片段，逐段生成要点摘要
- *   （每段 ≤200 字）；片段摘要按内容哈希缓存（`handoff-chunks` 表），
- *   append-only 日志下旧片段天然命中缓存，增量会话只重摘新增部分；
- * - **reduce**：将各段要点按出现顺序合并为最终 ≤500 字交接摘要；
- *   极端超长（片段摘要本身超预算）时递归归并（层级树）。
- *
- * 查询聚焦（focus）：可选主题词同时注入 map 与 reduce 提示词，
- * 保留与主题相关的内容（对话方向不同侧面的定向压缩）。
- */
 import type { Domain } from '@deepseek-ai/dsh-storage';
 import type { ChatMessage } from '../../core/deepseek.js';
 import type { TranscriptTurn } from '../../core/transcript.js';
@@ -55,7 +41,10 @@ export declare class HandoffChunkStore {
     private readonly table;
     /** 在已打开的 companion 存储域上创建。 */
     constructor(domain: Domain);
-    /** 缓存键：片段文本与 focus 联合哈希（十进制字符串键）。 */
+    /**
+     * 缓存键：片段文本与 focus 的 SHA-256 联合摘要。32 位 FNV 可在正常语料规模
+     * 发生碰撞，进而把另一段对话的摘要错误注入当前交接；加密摘要避免该数据完整性风险。
+     */
     private keyOf;
     /** 读取缓存（同步内存读）；不存在返回 undefined。 */
     get(chunk: string, focus: string | undefined): ChunkSummaryRecord | undefined;

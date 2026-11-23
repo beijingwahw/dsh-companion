@@ -17,9 +17,10 @@
  * 差额，失败则 release() 全额释放。可用额度恒为
  *   available = budget − spent − Σ在途预留，
  * 不变式收紧为「最终支出 ≤ 预算 + Σ在途(实际−估算)⁺」——超支上界从
- * 「并发数 × 单次全额」降为「并发数 × 估算误差」。预留带 TTL 懒回收
- * （惰性清扫，无空闲定时器）：超时未结算的孤儿预留（调用崩溃路径）在
- * 下次访问时自动释放；TTL 取 apiTimeoutMs + 缓冲，覆盖在途调用窗口。
+ * 「并发数 × 单次全额」降为「并发数 × 估算误差」。预留带 TTL 惰性隔离
+ * （无空闲定时器）：TTL 只是调用窗口估计，过期不等于调用已结束，因此
+ * 超时记录仍占额，必须等待真实 settle/release；极端孤儿保守锁定到进程
+ * 重启，绝不为了“回收”而把仍在途的额度重复授予新调用。
  * settle 使 spent 缓存失效而非累加：结算费用已由核心服务在调用内
  * await 落盘，失效后的全量扫描必然精确（旧累加实现在并发刷新恰好
  * 插在记账与结算之间时双重计入）。
@@ -100,7 +101,7 @@ export declare class BudgetGuard {
      * 投影口径：任一档（日/月）的 projected = spent + Σ在途预留 + 本次估算
      * 达到该档预算即拒绝非必要调用；essential 调用透支放行（告警）。
      * 告警按「档位 + 周期键」经既有 alertOnce 去重（fire-and-forget，
-     * 写盘失败不阻塞调用）。预留带 TTL，由惰性清扫回收孤儿记录。
+     * 写盘失败不阻塞调用）。TTL 到期只标记过期，记录仍占额直至 settle/release。
      * @param estimateCny 估算费用（元）。
      * @param essential 必要调用：预授权不足时仍放行（透支告警）。
      * @param ttlMs 预留有效期：应覆盖单次调用窗口（apiTimeoutMs + 缓冲）。
@@ -117,7 +118,11 @@ export declare class BudgetGuard {
      * 双重计入（且顺带续期 TTL，延长偏差窗口）；失效则两个方向都不偏。
      */
     private applySettlement;
-    /** 惰性清扫：释放超时未结算的孤儿预留（调用崩溃路径），无空闲定时器。 */
+    /**
+     * 惰性隔离过期预留，但不提前释放额度。
+     * TTL 只是调用窗口估计；响应体慢读或调用方取消滞后都可能超过它。真正的
+     * settle/release 到达时才删除记录。极端孤儿会保守占额到进程重启，优于超支。
+     */
     private sweepExpired;
     /** fire-and-forget 告警：写盘与通知失败均不阻塞预授权路径。 */
     private fireAlert;

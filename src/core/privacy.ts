@@ -50,17 +50,38 @@ const JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{8,}\b/g
 const MERGEABLE_WIDTHS = new Set([11, 15, 16, 17, 18, 19])
 
 /**
+ * 合并后的纯数字串是否会被任一号码规则命中。
+ * 判定条件与 redactText 中各规则的主体一致（锚定到整串），
+ * 顺序不影响布尔结果——具体分类仍由主管道的规则顺序决定。
+ */
+function isSensitiveDigits(digits: string): boolean {
+  // 手机号：1[3-9] 开头的 11 位。
+  if (/^1[3-9]\d{9}$/.test(digits)) return true
+  // 18 位身份证：生日段合法（与 ID_CARD_RE 相同的月/日约束）。
+  if (/^\d{6}\d{4}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}[\dXx]$/.test(digits)) return true
+  // 15 位老式身份证：生日段合法（与 OLD_ID_CARD_RE 相同）。
+  if (/^\d{6}\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\d{3}$/.test(digits)) return true
+  // 银行卡：16-19 位（与 BANK_CARD_RE 位宽一致）。
+  if (/^\d{16,19}$/.test(digits)) return true
+  return false
+}
+
+/**
  * 数字段分隔符归一化：去掉数字之间的空格与连字符，
  * 使 `138-1234-5678`、`6222 0202 0000 1234` 这类分组写法可被识别。
- * 仅当合并后的位宽恰好命中某条规则的位宽时才合并；落在 12-14 位
- * 空窗区的分段保持原样——既避免把 `+86 13812345678` 粘合成无法
- * 匹配的 13 位长串（反而泄露手机号），也不破坏日期加短编号等文本。
+ * 仅当合并后的位宽恰好命中某条规则的位宽、且合并结果确实会被
+ * 某条号码规则打码时才合并：
+ * - 落在 12-14 位空窗区的分段保持原样——既避免把 `+86 13812345678`
+ *   粘合成无法匹配的 13 位长串（反而泄露手机号），也不破坏日期加短编号等文本；
+ * - 位宽命中但内容不命中任何规则的（如 `2024 0101 123`、`010 1234 5678`）
+ *   同样保持原样——未命中任何隐私规则时导出文本必须逐字符不变。
  */
 function normalizeDigitSeparators(text: string): string {
   return text.replace(/\d(?:[\s-]*\d)+/g, (run) => {
-    const digitCount = run.replace(/\D/g, '').length
-    if (!MERGEABLE_WIDTHS.has(digitCount)) return run
-    return run.replace(/[\s-]+/g, '')
+    const digits = run.replace(/\D/g, '')
+    if (!MERGEABLE_WIDTHS.has(digits.length)) return run
+    if (!isSensitiveDigits(digits)) return run
+    return digits
   })
 }
 

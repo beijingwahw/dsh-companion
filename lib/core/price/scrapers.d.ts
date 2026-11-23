@@ -9,6 +9,18 @@ export declare function parseRawTables(html: string): RawCell[][][];
 /** 展开 rowspan/colspan 为矩形文本网格。 */
 export declare function toGrid(rows: RawCell[][]): string[][];
 /**
+ * 单价的合理性上限（元/百万 tokens）。国产厂商官方刊例价最高约 ¥120/百万，
+ * 上限留近 10 倍余量；超过即视为解析串扰或异常数据，绝不当有效官方计价。
+ */
+export declare const MAX_PLAUSIBLE_PRICE = 1000;
+/** 单价在数值与业务上是否合理：有限、非负、未超离谱上限。 */
+export declare function isSanePrice(value: number): boolean;
+/**
+ * 对实时解析出的价格表做 fail-closed 校验：丢弃任何字段缺失、非有限、
+ * 为负或离谱偏大的条目。全部被丢弃时返回空表（调用方沿用现有价格）。
+ */
+export declare function sanitizeLiveTable(table: PriceTable): PriceTable;
+/**
  * 解析单个价格单元格为 元/百万 tokens。
  * "免费" → 0；美元单元格 → undefined（不支持，调用方回退）。
  */

@@ -93,7 +93,17 @@ ok('novelty 迷你图封顶 64 点', () => {
 })
 
 // --------------------------------------------------------------------
-// 案例 3：渐近相变（B 主题占比平滑爬升）→ warning（临界慢化三证据共现）
+// 案例 3：渐近相变（B 主题占比加速爬升）→ warning（临界慢化三证据共现）
+//
+// 数据形态要点（JS 散度修正后仍真实成立的慢化形状，不是凑阈值）：
+// - 占比爬升取**加速**（平方）曲线：新奇度是单元对前 16 单元滑动
+//   基线的散度，线性爬升下「单元份额 − 尾随基线份额」之差近似
+//   常数，新奇度平台化、方差比过不了 1.6；加速爬升让当前与过去
+//   的差距随时间放大——这才是方差发散（发散性证据）的来源；
+// - B 词以旋转偏移的确定性构成渗入（而非逐单元重抽随机子集）：
+//   随机重抽把逐单元采样噪声叠在爬升信号上，新奇度高频抖动、
+//   滞后 1 自相关被负化；旋转构成让相邻单元分布缓慢形变——
+//   这正是临界慢化「扰动后停留更久」的持续性（AR(1) 上升）特征。
 // --------------------------------------------------------------------
 const approaching = []
 for (let i = 0; i < 60; i += 1) {
@@ -101,12 +111,17 @@ for (let i = 0; i < 60; i += 1) {
     approaching.push(unit(i, draw(TOPIC_A, i, 24)))
   } else {
     const mix = (i - 29) / 30 // 0.03..1.0
-    const fromB = Math.min(24, Math.round(mix * 24))
-    const text =
-      fromB === 0
-        ? draw(TOPIC_A, i, 24)
-        : `${draw(TOPIC_B, i, fromB)} ${draw(TOPIC_A, i, 24 - fromB)}`.trim()
-    approaching.push(unit(i, text))
+    const fromB = Math.round(mix * mix * 24) // 加速爬升：0→24 个词位
+    const offset = i % TOPIC_B.length
+    const words = []
+    for (let j = 0; j < 24; j += 1) {
+      words.push(
+        j < fromB
+          ? TOPIC_B[(offset + j) % TOPIC_B.length]
+          : TOPIC_A[(offset + j) % TOPIC_A.length],
+      )
+    }
+    approaching.push(unit(i, words.join(' ')))
   }
 }
 const warningReport = detectEarlyWarning(approaching)

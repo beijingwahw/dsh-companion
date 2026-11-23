@@ -23,6 +23,8 @@
 export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo' | 'earlywarning';
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info';
+/** 可选安全动作；只能由白名单处理器解释，绝不执行任意命令文本。 */
+export type InsightActionId = 'open-cognition' | 'reindex-retrieval';
 /** 单条洞察卡片。 */
 export interface InsightCard {
     /** 洞察分类。 */
@@ -35,6 +37,10 @@ export interface InsightCard {
     readonly action?: string;
     /** 信号来源标识（可解释性：卡片来自哪个提供者）。 */
     readonly source: string;
+    /** 跨刷新稳定的语义键；缺省时由动作或正文生成指纹。 */
+    readonly key?: string;
+    /** 可选白名单动作；action 仍只用于向人解释建议。 */
+    readonly actionId?: InsightActionId;
 }
 /** 脉搏报告（一次主动合成的全部洞察）。 */
 export interface PulseReport {

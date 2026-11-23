@@ -16,7 +16,8 @@ import {
   type ChatMessage,
   type ChatResult,
 } from './deepseek.js'
-import { createRouter, type CompanionRouter } from './http.js'
+import { createRouter, HttpError, sendJson, type CompanionRouter } from './http.js'
+import { InsightCenter, type InsightCenterFeedbackAction } from './insights/center.js'
 import { CredentialRef } from './ids.js'
 import { round4, tokenUsageToUsageLike } from './pricing.js'
 import { OFFICIAL_PRICING_URL, PriceService, type MinimalLogger } from './price/service.js'
@@ -71,6 +72,8 @@ export interface CallHook {
 export interface CompanionCore {
   readonly config: Config
   readonly http: CompanionRouter
+  /** 统一主动智能中心：模块注册信号源，客户端读取聚合 feed 与写回反馈。 */
+  readonly insights: InsightCenter
   /** 存储域就绪 Promise（open 是异步的）。 */
   readonly ready: Promise<CompanionStore>
   /** 解析 API Key：保险库优先，其次 credentials seam。 */
@@ -105,6 +108,7 @@ export class CompanionCoreService extends Service implements CompanionCore {
   static inject = ['webServer', 'storageDomain', 'credentials']
 
   readonly http: CompanionRouter = createRouter('/companion')
+  readonly insights: InsightCenter
   readonly prices: PriceService
   /** 内部存储域初始化 promise；失败后被重置，下次访问 ready 时重试 open。 */
   private readyPromise?: Promise<CompanionStore>
@@ -118,6 +122,15 @@ export class CompanionCoreService extends Service implements CompanionCore {
     readonly config: Config,
   ) {
     super(ctx, 'companion')
+
+    this.insights = new InsightCenter(
+      async () => (await this.ready).domain.table('proactive-insights'),
+      {
+        onNotifications: (cards, feed) => {
+          this.ctx.emit('companion/insights', { generatedAt: feed.generatedAt, cards })
+        },
+      },
+    )
 
     // 动态计价引擎：官方定价页抓取失败静降级（保留上一份有效表），
     // 仅官方价格真实变更时经 info → notice 提示用户；warn 不打扰 UI。
@@ -139,6 +152,48 @@ export class CompanionCoreService extends Service implements CompanionCore {
         return dispose
       },
       'companion.http-route',
+    )
+
+    // 统一主动智能 API：保留各模块旧脉搏端点，新客户端只依赖这里。
+    ctx.effect(
+      () => this.http.add('GET', '/insights', async (_req, res, { query }) => {
+        const force = query.get('force') === 'true' || query.get('force') === '1'
+        sendJson(res, 200, await this.insights.feed(force))
+      }),
+      'companion.insights-feed',
+    )
+    ctx.effect(
+      () => this.http.add('POST', '/insights/ack', async (_req, res, { body }) => {
+        const record = insightBody(body)
+        const all = record.all
+        if (all !== undefined && typeof all !== 'boolean') throw new HttpError('all 必须是布尔值', 400)
+        let ids: string[] | undefined
+        if (record.ids !== undefined) {
+          if (!Array.isArray(record.ids) || record.ids.length > 50 || !record.ids.every(isInsightId)) {
+            throw new HttpError('ids 必须是最多 50 个合法洞察指纹', 400)
+          }
+          ids = record.ids
+        }
+        if (all !== true && ids === undefined) throw new HttpError('请提供 ids 或 all=true', 400)
+        const changed = await this.insights.acknowledge({ ids, all })
+        sendJson(res, 200, { ok: true, changed })
+      }),
+      'companion.insights-ack',
+    )
+    ctx.effect(
+      () => this.http.add('POST', '/insights/feedback', async (_req, res, { body }) => {
+        const record = insightBody(body)
+        if (!isInsightFeedbackAction(record.action)) throw new HttpError('未知洞察反馈动作', 400)
+        const id = record.id
+        if (record.action !== 'restore-all' && !isInsightId(id)) {
+          throw new HttpError('id 必须是合法洞察指纹', 400)
+        }
+        if (id !== undefined && !isInsightId(id)) throw new HttpError('id 必须是合法洞察指纹', 400)
+        const changed = await this.insights.feedback(isInsightId(id) ? id : undefined, record.action)
+        if (!changed && record.action !== 'restore-all') throw new HttpError('洞察不存在或已失效', 404)
+        sendJson(res, 200, { ok: true, changed })
+      }),
+      'companion.insights-feedback',
     )
 
     // 构造时即启动初始化（ensureReady 内部已挂兜底 catch，无未处理 rejection）。
@@ -295,4 +350,25 @@ export class CompanionCoreService extends Service implements CompanionCore {
       }
     }
   }
+}
+
+
+/** 将 JSON 正文收窄为普通对象。 */
+function insightBody(body: unknown): Record<string, unknown> {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError('请求正文必须是 JSON 对象', 400)
+  }
+  return body as Record<string, unknown>
+}
+
+/** 洞察指纹格式：固定 64 位十六进制，禁止把正文或任意命令写入状态键。 */
+function isInsightId(value: unknown): value is string {
+  return typeof value === 'string' && /^ins_[0-9a-f]{16}$/.test(value)
+}
+
+/** 反馈动作白名单。 */
+function isInsightFeedbackAction(value: unknown): value is InsightCenterFeedbackAction {
+  return value === 'acknowledge' || value === 'snooze' || value === 'dismiss' ||
+    value === 'restore' || value === 'helpful' || value === 'unhelpful' ||
+    value === 'acted' || value === 'resolved' || value === 'restore-all'
 }

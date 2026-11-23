@@ -78,6 +78,13 @@
   color: var(--dsw-alias-text-primary, #1f2329);
 }
 
+/* 窄视口（≤480px，覆盖 360px 移动宽度）：解除固定 min-width，避免横向溢出。 */
+@media (max-width: 480px) {
+  .pasteBody {
+    min-width: 0;
+  }
+}
+
 .pasteHint {
   margin: 0;
   font-size: 13px;

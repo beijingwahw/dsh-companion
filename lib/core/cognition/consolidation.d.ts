@@ -87,7 +87,7 @@ export declare function estimatedJaccard(a: ReadonlyArray<number>, b: ReadonlyAr
 /**
  * 记忆固化主入口：近重复检测 + 聚类 + 固化计划。
  *
- * @param items 记忆项（任意顺序；内部按 id 稳定排序）。
+ * @param items 记忆项（任意顺序；内部按时间近端优先截断、id 兜底稳定排序）。
  * @param options 配置（见 ConsolidationOptions）。
  */
 export declare function consolidateMemories(items: readonly ConsolidationItem[], options?: ConsolidationOptions): ConsolidationPlan;

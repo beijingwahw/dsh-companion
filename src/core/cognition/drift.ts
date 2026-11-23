@@ -445,13 +445,17 @@ function jsDivergence(
     const qw = (q.get(w) ?? 0) / qTot
     const m = (pw + qw) / 2
     js += 0.5 * pw * Math.log2(pw / m)
+    // 重叠支撑集上 q 侧同样贡献 0.5·qw·log2(qw/m)——漏掉会把
+    // JS 散度系统性低估（重叠越大低估越多）。
+    if (qw > 0) js += 0.5 * qw * Math.log2(qw / m)
   }
   for (const [w, qc] of q) {
     if ((p.get(w) ?? 0) > 0) continue
     const qw = qc / qTot
-    js += 0.5 * qw // log2(qw / (qw/2)) = 1
+    js += 0.5 * qw // q\p 侧：m = qw/2，log2(qw/m) = 1
   }
-  return js
+  // 数值稳定：浮点累积可能让理论上限 1 轻微越界，按文档口径钳回 [0,1]。
+  return Math.min(1, Math.max(0, js))
 }
 
 /** 数据不足时的平凡报告。 */

@@ -18,6 +18,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { RealDomainFacility } from '../core/storage-adapter.js'
+import type { ManagedInsightCard } from '../core/insights/policy.js'
 
 // ---------------------------------------------------------------------------
 // 品牌类型（Harness 约定：跨边界的不透明 id 一律品牌化，不用裸 string）
@@ -335,6 +336,11 @@ declare module '@deepseek-ai/cordis' {
       readonly spentCny: number
       readonly budgetCny: number
       readonly paused: boolean
+    }): void
+    /** 新一轮克制通知产生后发出；仅内存传递卡片，不复制到持久化状态。 */
+    'companion/insights'(feed: {
+      readonly generatedAt: number
+      readonly cards: readonly ManagedInsightCard[]
     }): void
     /** 插件对用户的一般性提醒（由 UI 层以 Toast 呈现）。 */
     'companion/notice'(notice: {

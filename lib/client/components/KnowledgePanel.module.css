@@ -1,0 +1,153 @@
+/* 知识资产面板样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.panelTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.panelHint {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.divider {
+  height: 1px;
+  background: var(--dsw-alias-border-default, #dee0e3);
+}
+
+.entityCloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.entityPill {
+  cursor: pointer;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.typeBadge {
+  font-size: 10px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.entityMeta {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.suggestionRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.relatedList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.relatedItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  cursor: pointer;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.relatedItem:hover {
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.relatedHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.relatedTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relatedScore {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.sharedRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sharedPill {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.error {
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.muted {
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.targetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.targetTitle {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}

@@ -30,6 +30,7 @@ import {
   type WhatIfScenario,
 } from './forecast.js'
 import { composeCostAdvice, type CostAdviceSnapshot } from './advice.js'
+import type { InsightCard } from '../../core/insights/pulse.js'
 import { CostGatewayService } from './gateway.js'
 import { compileCustomRules, MAX_CUSTOM_RULES, MAX_RULE_PATTERN_LENGTH } from './router.js'
 import { registerCostSettings, type CostCustomRule, type CostSettings } from './settings.js'
@@ -72,6 +73,7 @@ export function apply(ctx: Context): void {
         // 官方价格内容变化时持久化新快照（静默降级：失败仅丢失下次
         // 重启后的“沿用上次官方价”能力，不影响实时计价）。
         ctx.companion.prices.onChanged = (sheet) => {
+          ctx.companion.insights.invalidate()
           void ctx.companion.ready
             .then(({ domain: d }) => d.table<unknown>('cost-extra').put(COST_EXTRA_SHEET_KEY, sheet))
             .catch(() => undefined)
@@ -161,6 +163,8 @@ export function apply(ctx: Context): void {
         if (record.modelRouting !== undefined) {
           patch.modelRouting = requireBoolean(record.modelRouting, 'modelRouting')
         }
+        if (record.simpleModel !== undefined) patch.simpleModel = requireModel(record.simpleModel, 'simpleModel')
+        if (record.complexModel !== undefined) patch.complexModel = requireModel(record.complexModel, 'complexModel')
         if (record.dailyBudgetCny !== undefined) {
           patch.dailyBudgetCny = requireBudgetCny(record.dailyBudgetCny, 'dailyBudgetCny')
         }
@@ -173,6 +177,7 @@ export function apply(ctx: Context): void {
         const pricingOverrides =
           record.pricing !== undefined ? parsePricing(record.pricing) : undefined
         await scope.update(patch)
+        ctx.companion.insights.invalidate()
         // pricing 覆盖不属于设置 schema：持久化到 cost-extra 并应用到动态计价引擎。
         if (pricingOverrides !== undefined) {
           const { domain } = await ctx.companion.ready
@@ -307,9 +312,8 @@ export function apply(ctx: Context): void {
     return Math.max(1, daysInMonth - p.day + 1)
   }
 
-  ctx.effect(
-    () =>
-      ctx.companion.http.add('GET', '/cost/advice', async (_req, res) => {
+  /** 组装成本顾问快照；HTTP 与主动 Provider 共用同一事实源。 */
+  async function costAdviceSnapshot(): Promise<CostAdviceSnapshot> {
         const { usage } = await ctx.companion.ready
         const settings = scope.get()
         const now = Date.now()
@@ -374,6 +378,27 @@ export function apply(ctx: Context): void {
           primaryModel,
           cheaperModel,
         }
+        return snapshot
+  }
+
+  ctx.effect(
+    () => ctx.companion.insights.register(async (): Promise<readonly InsightCard[]> => {
+      const snapshot = await costAdviceSnapshot()
+      return composeCostAdvice(snapshot).cards.map((card) => ({
+        category: 'cost',
+        key: `cost:${card.kind}`,
+        severity: card.severity === 'critical' ? 'critical' : card.severity === 'recommended' ? 'watch' : 'info',
+        text: card.action,
+        source: '成本优化顾问（本地用量与计价）',
+      }))
+    }),
+    'companion.cost-insight-provider',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/cost/advice', async (_req, res) => {
+        const snapshot = await costAdviceSnapshot()
         sendJson(res, 200, { snapshot, ...composeCostAdvice(snapshot) })
       }),
     'companion.cost-http-advice',
@@ -503,6 +528,13 @@ function requireString(value: unknown, field: string): string {
     throw new HttpError(`${field} 必须是非空字符串`, 400)
   }
   return value.trim()
+}
+
+/** 读取模型名：非空且有界，避免异常设置进入路由与计价键。 */
+function requireModel(value: unknown, field: string): string {
+  const model = requireString(value, field)
+  if (model.length > 128) throw new HttpError(`${field} 不能超过 128 个字符`, 400)
+  return model
 }
 
 /** 读取必填布尔字段。 */

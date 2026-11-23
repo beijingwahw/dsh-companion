@@ -37,6 +37,9 @@ export type InsightCategory =
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info'
 
+/** 可选安全动作；只能由白名单处理器解释，绝不执行任意命令文本。 */
+export type InsightActionId = 'open-cognition' | 'reindex-retrieval'
+
 /** 单条洞察卡片。 */
 export interface InsightCard {
   /** 洞察分类。 */
@@ -49,6 +52,10 @@ export interface InsightCard {
   readonly action?: string
   /** 信号来源标识（可解释性：卡片来自哪个提供者）。 */
   readonly source: string
+  /** 跨刷新稳定的语义键；缺省时由动作或正文生成指纹。 */
+  readonly key?: string
+  /** 可选白名单动作；action 仍只用于向人解释建议。 */
+  readonly actionId?: InsightActionId
 }
 
 /** 脉搏报告（一次主动合成的全部洞察）。 */
@@ -113,6 +120,7 @@ export function blindSpotInsights(report: {
   return [
     {
       category: 'blindspot',
+      key: `blindspot:${top.anchor.toLocaleLowerCase()}`,
       severity: top.searches >= 5 ? 'watch' : 'info',
       text: `你反复搜索「${top.anchor}」（${top.searches} 次）但历史对话无覆盖——这是知识资产的真实缺口`,
       action: top.advice,
@@ -130,6 +138,7 @@ export function learningInsights(stats: {
     return [
       {
         category: 'learning',
+      key: 'learning:profile',
         severity: 'info',
         text: '反馈学习尚未建立画像：在语义检索结果中点击会话，检索器将逐渐学会你真正想要的',
         action: '下次检索时点击结果即可开始积累',
@@ -141,6 +150,7 @@ export function learningInsights(stats: {
     return [
       {
         category: 'learning',
+      key: 'learning:profile',
         severity: 'info',
         text: `反馈学习已启动：${stats.profiledSessions} 个会话建立点击画像（累计 ${stats.totalClicks} 次点击）`,
         action: '画像随点击持续丰富，检索排序会越来越贴合你的偏好',
@@ -151,6 +161,7 @@ export function learningInsights(stats: {
   return [
     {
       category: 'learning',
+      key: 'learning:profile',
       severity: 'info',
       text: `反馈学习运转中：${stats.profiledSessions} 个会话画像（累计 ${stats.totalClicks} 次点击）在持续影响排序`,
       source: '反馈学习（轴 11）',
@@ -169,6 +180,8 @@ export function indexInsights(stats: {
   if (stats.totalSessions === 0) {
     cards.push({
       category: 'index',
+      key: 'index:empty',
+      actionId: 'reindex-retrieval',
       severity: 'watch',
       text: '语义索引为空：还没有任何会话被索引，语义检索暂不可用',
       action: '产生对话后索引会自动对账建立',
@@ -180,6 +193,8 @@ export function indexInsights(stats: {
   if (coverage < 0.9) {
     cards.push({
       category: 'index',
+      key: 'index:coverage',
+      actionId: 'reindex-retrieval',
       severity: coverage < 0.5 ? 'watch' : 'info',
       text: `索引覆盖率 ${Math.round(coverage * 100)}%（${stats.indexedSessions}/${stats.totalSessions}）——部分会话未进入语义检索范围`,
       action: '执行一次检索或重建索引可触发对账',
@@ -191,6 +206,8 @@ export function indexInsights(stats: {
     if (ageMinutes > 60) {
       cards.push({
         category: 'index',
+        key: 'index:stale',
+        actionId: 'reindex-retrieval',
         severity: 'info',
         text: `索引最近对账在 ${Math.round(ageMinutes / 60)} 小时前——近期对话可能尚未进入检索范围`,
         action: '执行任意检索即触发增量对账（约数秒）',

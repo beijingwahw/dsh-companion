@@ -571,6 +571,7 @@ export function apply(ctx: Context): void {
         }
       }
       lastSyncAt = Date.now()
+      if (updated > 0 || removed > 0) ctx.companion.insights.invalidate()
       return {
         sessions: versions.size,
         entities: entities.size,
@@ -840,6 +841,7 @@ export function apply(ctx: Context): void {
     // 节律闭环（轴线 24）：本次评分计入命中率，系数按偏差调整。
     const nextRhythm = updateRhythm(rhythm, remembered, now)
     await rhythmTable?.put(RHYTHM_PROFILE_KEY, nextRhythm)
+    ctx.companion.insights.invalidate()
     return {
       stage: result.state.stage,
       nextDueAt: result.nextDueAt,
@@ -1209,6 +1211,18 @@ export function apply(ctx: Context): void {
     )
   }
 
+  // 统一 Provider 与旧 GET /knowledge/pulse 共用同一合成路径，确保信号口径一致。
+  ctx.effect(
+    () => ctx.companion.insights.register(async () => {
+      await ctx.companion.ready
+      await syncKnowledge(false)
+      return (await knowledgePulse()).cards.map((card) => ({
+        ...card,
+        actionId: 'open-cognition' as const,
+      }))
+    }),
+    'companion.knowledge-insight-provider',
+  )
 
   // ------------------------------------------------------------------
   // HTTP 端点（注册即 effect）

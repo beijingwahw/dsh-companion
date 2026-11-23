@@ -35,6 +35,8 @@ export interface LineageEdge {
   excerpt: string
   /** 边建立时间（毫秒）。 */
   linkedAt: number
+  /** 悬边所属 pending 世代；只有相同 armedAt 的消费/过期才能改写或删除。 */
+  pendingArmedAt?: number
 }
 
 /** 图遍历结果条目（含跳数）。 */
@@ -75,13 +77,19 @@ export class LineageStore {
    * 记录一条继承边；target 为 null 表示悬边（pending 待解析）。
    * 写入后滚动修剪到 EDGE_KEEP_LIMIT 条。
    */
-  async recordEdge(source: string, target: string | null, summary: string): Promise<void> {
+  async recordEdge(
+    source: string,
+    target: string | null,
+    summary: string,
+    pendingArmedAt?: number,
+  ): Promise<void> {
     const linkedAt = Date.now()
     const edge: LineageEdge = {
       sourceSessionId: source,
       targetSessionId: target,
       excerpt: firstLineExcerpt(summary),
       linkedAt,
+      pendingArmedAt: target === null ? pendingArmedAt : undefined,
     }
     await this.table.put(this.keyOf(source, target, linkedAt), edge)
     const entries = this.table.entries()
@@ -93,14 +101,13 @@ export class LineageStore {
   }
 
   /**
-   * 解析悬边：pending 摘要已投递到 target 会话时，把全部 target=null
-   * 的边改写为该目标（pending 槽位是单例，悬边只能属于同一次武装）。
+   * 按 armedAt 世代解析悬边；重复武装留下的旧悬边不会被新投递误认领。
    * 同时保留原 linkedAt（血缘时间 = 武装时刻）。
    */
-  async resolvePendingTargets(target: string): Promise<void> {
+  async resolvePendingTargets(target: string, armedAt: number): Promise<void> {
     const pending = this.table
       .entries()
-      .filter(([, edge]) => edge.targetSessionId === null)
+      .filter(([, edge]) => edge.targetSessionId === null && edge.pendingArmedAt === armedAt)
     for (const [key, edge] of pending) {
       if (edge.sourceSessionId === target) {
         // 自环（摘要武装回来源会话）：删除而非改写，保持 DAG 语义。
@@ -115,11 +122,15 @@ export class LineageStore {
     }
   }
 
-  /** 删除全部悬边（pending 被解除/过期时调用，防止误认领）。 */
-  async deletePendingEdges(): Promise<void> {
+  /** 删除悬边；传入 armedAt 时只清理对应世代，显式解除则清理全部。 */
+  async deletePendingEdges(armedAt?: number): Promise<void> {
     const pending = this.table
       .entries()
-      .filter(([, edge]) => edge.targetSessionId === null)
+      .filter(
+        ([, edge]) =>
+          edge.targetSessionId === null &&
+          (armedAt === undefined || edge.pendingArmedAt === armedAt),
+      )
     for (const [key] of pending) await this.table.delete(key)
   }
 

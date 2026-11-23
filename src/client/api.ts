@@ -905,26 +905,39 @@ export function fetchRetrievalBlindSpots(options?: RequestOptions): Promise<Retr
   return companionGet<RetrievalBlindSpotsResponse>('/retrieval/blindspots', undefined, options)
 }
 
+/** 洞察分类完整联合（检索/认知/成本/上下文/元认知全部信号源）。 */
+export type InsightCategory =
+  | 'blindspot'
+  | 'learning'
+  | 'index'
+  | 'cost'
+  | 'context'
+  | 'topic'
+  | 'intention'
+  | 'review'
+  | 'forecast'
+  | 'echo'
+  | 'earlywarning'
+
+/** 洞察卡片内置动作白名单（客户端只识别这两个；绝不执行 action 文本或任意命令）。 */
+export type InsightActionId = 'open-cognition' | 'reindex-retrieval'
+
 /** 单条洞察卡片（轴线 18）。 */
 export interface InsightCard {
-  /** 洞察分类（intention/review 为认知三轴扩展）。 */
-  readonly category:
-    | 'blindspot'
-    | 'learning'
-    | 'index'
-    | 'cost'
-    | 'context'
-    | 'topic'
-    | 'intention'
-    | 'review'
+  /** 洞察分类。 */
+  readonly category: InsightCategory
   /** 严重度（critical > watch > info 排序）。 */
   readonly severity: 'critical' | 'watch' | 'info'
   /** 洞察正文。 */
   readonly text: string
-  /** 建议动作。 */
+  /** 建议动作（纯展示文本；客户端不得将其作为命令执行）。 */
   readonly action?: string
   /** 信号来源标识。 */
   readonly source: string
+  /** 稳定内容键（服务端去重/跨源合并用）。 */
+  readonly key?: string
+  /** 内置动作标识（白名单；缺省 = 无内置动作）。 */
+  readonly actionId?: InsightActionId
 }
 
 /** `GET /retrieval/insights` 响应（轴线 18：主动脉搏）。 */
@@ -940,6 +953,95 @@ export interface RetrievalInsightsResponse {
 /** 读取主动脉搏（轴线 18）：主动聚合的洞察卡片。 */
 export function fetchRetrievalInsights(options?: RequestOptions): Promise<RetrievalInsightsResponse> {
   return companionGet<RetrievalInsightsResponse>('/retrieval/insights', undefined, options)
+}
+
+// ---------------------------------------------------------------------------
+// 统一主动智能 feed（/insights/*）：跨信号源的托管洞察生命周期
+// ---------------------------------------------------------------------------
+
+/** 托管洞察卡片（`GET /insights`）：在 InsightCard 上叠加服务端托管的生命周期状态。 */
+export interface ManagedInsightCard extends InsightCard {
+  /** 服务端托管的稳定 id（列表 key、反馈与已读上报均引用该值）。 */
+  readonly id: string
+  /** 展示优先级（服务端已按此排序，客户端保持返回顺序）。 */
+  readonly priority: number
+  /** 是否未读。 */
+  readonly unread: boolean
+  /** 首次出现时间（毫秒时间戳）。 */
+  readonly firstSeenAt: number
+  /** 最近一次主动通知时间（未通知过则缺省）。 */
+  readonly lastNotifiedAt?: number
+  /** 累计通知次数。 */
+  readonly notificationCount: number
+  /** 用户反馈（有用/无用）。 */
+  readonly feedback?: 'helpful' | 'unhelpful'
+  /** 处置结果（已行动/已解决/已忽略）。 */
+  readonly outcome?: 'acted' | 'resolved' | 'dismissed'
+}
+
+/** `GET /insights` 响应：统一主动智能 feed。 */
+export interface InsightsResponse {
+  /** 按优先级排序的托管洞察卡片。 */
+  readonly cards: readonly ManagedInsightCard[]
+  /** 人话摘要。 */
+  readonly summary: string
+  /** 合成时间戳。 */
+  readonly generatedAt: number
+  readonly unreadCount: number
+  readonly snoozedCount: number
+  readonly dismissedCount: number
+  /** 本次合成中失败的信号源数量（>0 时面板降级提示）。 */
+  readonly providerFailures: number
+}
+
+/** `POST /insights/ack` 请求体：按 id 列表或全部标记已读。 */
+export interface InsightAckRequest {
+  readonly ids?: readonly string[]
+  readonly all?: boolean
+}
+
+/** `POST /insights/feedback` 请求体（单卡反馈/处置，或恢复全部忽略）。 */
+export type InsightFeedbackRequest =
+  | {
+      readonly id: string
+      readonly action:
+        | 'acknowledge'
+        | 'snooze'
+        | 'dismiss'
+        | 'restore'
+        | 'helpful'
+        | 'unhelpful'
+        | 'acted'
+        | 'resolved'
+    }
+  | { readonly action: 'restore-all' }
+
+/** 拉取统一主动智能 feed；force=true 强制服务端重新合成。 */
+export function fetchInsights(
+  request?: { force?: boolean },
+  options?: RequestOptions,
+): Promise<InsightsResponse> {
+  return companionGet<InsightsResponse>(
+    '/insights',
+    { force: request?.force ? 'true' : undefined },
+    options,
+  )
+}
+
+/** 已读上报：按 id 列表或全部（打开面板后 ack 全部可见未读）。 */
+export function acknowledgeInsights(
+  request: InsightAckRequest,
+  options?: RequestOptions,
+): Promise<OkResponse> {
+  return companionPost<OkResponse>('/insights/ack', request, options)
+}
+
+/** 单卡反馈/处置（有用/稍后/忽略…）或恢复全部忽略。 */
+export function sendInsightFeedback(
+  request: InsightFeedbackRequest,
+  options?: RequestOptions,
+): Promise<OkResponse> {
+  return companionPost<OkResponse>('/insights/feedback', request, options)
 }
 
 // ---------------------------------------------------------------------------

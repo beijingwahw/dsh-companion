@@ -20,8 +20,8 @@ import type { ChatMessage } from '../../core/deepseek.js'
 import { HttpError, sendJson } from '../../core/http.js'
 import { SessionId } from '../../core/ids.js'
 import { formatTranscript, transcriptFromLog } from '../../core/transcript.js'
-import type { SessionLogSnapshot } from '../../types/harness.js'
-import { ArmedStore } from './armed.js'
+import type { SessionLogSnapshot, SessionQueryEngine } from '../../types/harness.js'
+import { ArmedStore, type ArmedRecord } from './armed.js'
 import { computeContextHealth } from './context-health.js'
 import {
   HandoffChunkStore,
@@ -121,10 +121,17 @@ export function apply(ctx: Context): void {
           if (assembly.scope === undefined || assembly.scope === null) return ''
           const pending = store.peekPending()
           if (!pending) return ''
-          // 世代门闩——过期自清：超时未投递自动作废，防僵尸注入。
+          // 世代门闩——过期自清：只作废 peek 到的这一代；即使此刻已重新武装，
+          // 旧过期回调也不能删除新记录，只能清理旧世代自己的血缘悬边。
           if (pending.expiresAt !== undefined && Date.now() > pending.expiresAt) {
             queueMicrotask(() => {
-              void store.expirePending().catch(() => undefined)
+              void store
+                .expirePending({ armedAt: pending.armedAt, summary: pending.summary })
+                .then(async () => {
+                  const stores = await storesReady
+                  await stores.lineage.deletePendingEdges(pending.armedAt)
+                })
+                .catch(() => undefined)
             })
             return ''
           }
@@ -148,7 +155,9 @@ export function apply(ctx: Context): void {
                   void store.writeReceipt(scopeText).catch(() => undefined)
                   // pending 已投递到 scopeText：图谱悬边解析为真实目标。
                   void storesReady
-                    .then((stores) => stores.lineage.resolvePendingTargets(scopeText))
+                    .then((stores) =>
+                      stores.lineage.resolvePendingTargets(scopeText, pending.armedAt),
+                    )
                     .catch(() => undefined)
                 }
                 // summary === undefined：记录已被新武装覆盖，新记录
@@ -209,15 +218,7 @@ export function apply(ctx: Context): void {
     templateName?: string,
     focus?: string,
   ): Promise<HandoffResult> {
-    let snapshot: SessionLogSnapshot
-    try {
-      snapshot = await ctx.sessionQuery.readSession(sessionId)
-    } catch (error) {
-      throw new HttpError(
-        `读取会话失败：${error instanceof Error ? error.message : String(error)}`,
-        404,
-      )
-    }
+    const snapshot = await readSessionSnapshot(ctx.sessionQuery, sessionId)
     const turns = transcriptFromLog(snapshot)
     if (turns.length === 0) {
       throw new HttpError('会话中没有可摘要的对话内容', 400)
@@ -274,7 +275,7 @@ export function apply(ctx: Context): void {
    * 已知会话 ID，装配回调只向「快照之外」的会话投递（详见 armed.ts 头注释）。
    * 快照失败（会话引擎异常）时退化为无快照记录（v0.1 近似），不阻塞武装。
    */
-  async function armPending(summary: string): Promise<void> {
+  async function armPending(summary: string): Promise<ArmedRecord> {
     const stores = await storesReady
     let knownSessions: string[] | undefined
     try {
@@ -283,7 +284,17 @@ export function apply(ctx: Context): void {
     } catch {
       knownSessions = undefined
     }
-    await stores.armed.arm(null, summary, { knownSessions, ttlMs: ARMED_TTL_MS })
+    const previousArmedAt = stores.armed.peekPending()?.armedAt
+    const record = await stores.armed.arm(null, summary, {
+      knownSessions,
+      ttlMs: ARMED_TTL_MS,
+    })
+    // 重新武装成功后，上一代悬边已不可能被合法消费；只清旧世代，避免
+    // 连续 import 留下孤儿边，也不误删并发请求刚写入的新世代边。
+    if (previousArmedAt !== undefined && previousArmedAt !== record.armedAt) {
+      await stores.lineage.deletePendingEdges(previousArmedAt)
+    }
+    return record
   }
 
   // ------------------------------------------------------------------
@@ -362,16 +373,22 @@ export function apply(ctx: Context): void {
         // 可选 sourceSessionId（轴线 2）：摘要来源会话，用于记录继承边。
         const sourceSessionId = optionalString(record.sourceSessionId, 'sourceSessionId')
         // 无 sessionId = 武装给“下一个新对话”（pending，世代门闩）。
+        let pendingArmedAt: number | undefined
         if (sessionId === undefined) {
-          await armPending(summary)
+          pendingArmedAt = (await armPending(summary)).armedAt
         } else {
           const stores = await storesReady
           await stores.armed.arm(sessionId, summary)
         }
-        // 继承图谱：携带来源会话时记录边（pending 悬边待投递解析）。
+        // 继承图谱：pending 悬边绑定精确武装世代，只有同世代投递才能认领。
         if (sourceSessionId !== undefined) {
           const stores = await storesReady
-          await stores.lineage.recordEdge(sourceSessionId, sessionId ?? null, summary)
+          await stores.lineage.recordEdge(
+            sourceSessionId,
+            sessionId ?? null,
+            summary,
+            pendingArmedAt,
+          )
         }
         sendJson(res, 200, { ok: true, sessionId: sessionId ?? null })
       }),
@@ -412,15 +429,7 @@ export function apply(ctx: Context): void {
       ctx.companion.http.add('GET', '/handoff/context-health', async (_req, res, { query }) => {
         const sessionId = (query.get('sessionId') ?? '').trim()
         if (sessionId.length === 0) throw new HttpError('sessionId 必填', 400)
-        let snapshot: SessionLogSnapshot
-        try {
-          snapshot = await ctx.sessionQuery.readSession(SessionId(sessionId))
-        } catch (error) {
-          throw new HttpError(
-            `读取会话失败：${error instanceof Error ? error.message : String(error)}`,
-            404,
-          )
-        }
+        const snapshot = await readSessionSnapshot(ctx.sessionQuery, SessionId(sessionId))
         // 上下文压力监测（轴线 6）：token 估算 + 耗尽预测 + 分级建议。
         sendJson(res, 200, {
           sessionId,
@@ -531,8 +540,29 @@ export function apply(ctx: Context): void {
 }
 
 // --------------------------------------------------------------------
-// 请求体收窄辅助（unknown → 具体形状；strict 下不用 any）
+// 会话读取与请求体收窄辅助（unknown → 具体形状；strict 下不用 any）
 // --------------------------------------------------------------------
+
+/**
+ * 读取会话并保留真实错误语义：只有明确的“不存在”才是 404；存储 I/O、
+ * 日志校验等系统性故障统一为不泄漏内部细节的 500，不能被调用方当成可跳过项。
+ */
+async function readSessionSnapshot(
+  query: SessionQueryEngine,
+  sessionId: SessionId,
+): Promise<SessionLogSnapshot> {
+  try {
+    return await query.readSession(sessionId)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /not\s*found|no\s*such|enoent|不存在|无会话|无此会话/i.test(error.message)
+    ) {
+      throw new HttpError(`会话不存在：${sessionId}`, 404)
+    }
+    throw new HttpError('读取会话失败：会话存储或日志校验异常', 500)
+  }
+}
 
 /** 将请求体收窄为 JSON 对象，否则 400。 */
 function readObject(body: unknown): Record<string, unknown> {

@@ -510,3 +510,191 @@
   font-size: 11px;
   color: var(--dsw-alias-text-secondary, #646a73);
 }
+
+/* 主动智能 feed（轴线 18 升级）：开关按钮、未读徽章、严重度徽章与卡片操作。 */
+
+/* 原生 button 复刻 secondary Button 视觉（原语未开放 aria-expanded/ref）。 */
+.feedToggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+  color: var(--dsw-alias-text-primary, #1f2329);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.feedToggle:hover {
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.feedBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.feedHeadActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.feedCardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.feedSevCritical,
+.feedSevWatch,
+.feedSevInfo {
+  font-size: 11px;
+}
+
+.feedSevCritical {
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.feedSevWatch {
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: #ff7d00;
+}
+
+.feedSevInfo {
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.feedUnread {
+  font-size: 11px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+  border: 1px solid var(--dsw-alias-danger-default, #f54a45);
+}
+
+.feedCardActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.feedAction,
+.feedActionPrimary {
+  padding: 2px 10px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+  color: var(--dsw-alias-text-secondary, #646a73);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.feedActionPrimary {
+  color: var(--dsw-alias-brand-default, #4d6bfe);
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+}
+
+.feedAction:hover,
+.feedActionPrimary:hover {
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.feedAction[aria-pressed='true'] {
+  color: var(--dsw-alias-brand-default, #4d6bfe);
+  border-color: var(--dsw-alias-brand-default, #4d6bfe);
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.feedAction:disabled,
+.feedActionPrimary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 键盘可达性：本视图全部可聚焦交互元素的可见焦点环。 */
+
+.tagButton {
+  display: inline-flex;
+  border-radius: 999px;
+}
+
+.suggestItem:focus-visible,
+.resultItem:focus-visible,
+.mapCluster:focus-visible,
+.researchSource:focus-visible,
+.feedToggle:focus-visible,
+.feedAction:focus-visible,
+.feedActionPrimary:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-default, #4d6bfe);
+  outline-offset: 1px;
+}
+
+.tagButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-default, #4d6bfe);
+  outline-offset: 2px;
+}
+
+/* 减少动态：用户偏好 reduced-motion 时停用本视图内的动画与过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  .view *,
+  .view *::before,
+  .view *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 窄视口（≤480px，覆盖 360px 移动宽度）：收紧留白、搜索行独占一行、日期不溢出。 */
+@media (max-width: 480px) {
+  .view {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .toolbar {
+    gap: 8px;
+  }
+
+  .searchWrap {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .dateField {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .resultHead {
+    flex-wrap: wrap;
+  }
+
+  .resultActions {
+    flex-shrink: 1;
+  }
+
+  .feedHeadActions {
+    flex-wrap: wrap;
+  }
+}

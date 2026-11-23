@@ -12,9 +12,9 @@
  * 查询聚焦（focus）：可选主题词同时注入 map 与 reduce 提示词，
  * 保留与主题相关的内容（对话方向不同侧面的定向压缩）。
  */
+import { createHash } from 'node:crypto'
 import type { Domain } from '@deepseek-ai/dsh-storage'
 import type { ChatMessage } from '../../core/deepseek.js'
-import { fnv1a32 } from '../../core/retrieval/tokenize.js'
 import type { TranscriptTurn } from '../../core/transcript.js'
 import { buildMapPrompt, buildReducePrompt } from './prompt.js'
 
@@ -110,9 +110,16 @@ export class HandoffChunkStore {
     this.table = domain.table<ChunkSummaryRecord>('handoff-chunks')
   }
 
-  /** 缓存键：片段文本与 focus 联合哈希（十进制字符串键）。 */
+  /**
+   * 缓存键：片段文本与 focus 的 SHA-256 联合摘要。32 位 FNV 可在正常语料规模
+   * 发生碰撞，进而把另一段对话的摘要错误注入当前交接；加密摘要避免该数据完整性风险。
+   */
   private keyOf(chunk: string, focus: string | undefined): string {
-    return String(fnv1a32(`${chunk}\u0000${focus?.trim() ?? ''}`))
+    return createHash('sha256')
+      .update(chunk)
+      .update('\u0000')
+      .update(focus?.trim() ?? '')
+      .digest('hex')
   }
 
   /** 读取缓存（同步内存读）；不存在返回 undefined。 */

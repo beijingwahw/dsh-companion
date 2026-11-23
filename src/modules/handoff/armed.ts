@@ -59,6 +59,8 @@ export interface ArmOptions {
 export class ArmedStore {
   private readonly table
   private readonly receipts
+  /** 进程内单调世代：同一毫秒连续 re-arm 也不能复用 pendingArmedAt。 */
+  private lastArmedAt = 0
 
   /** 在已打开的 companion 存储域上创建。 */
   constructor(domain: Domain) {
@@ -70,13 +72,21 @@ export class ArmedStore {
    * 武装摘要；sessionId 为 null 时武装给下一个新对话（pending，同键覆盖）。
    * pending 武装可携带世代快照与有效期（详见文件头注释）。
    */
-  async arm(sessionId: string | null, summary: string, options?: ArmOptions): Promise<void> {
-    const record: ArmedRecord = { summary, armedAt: Date.now() }
+  async arm(sessionId: string | null, summary: string, options?: ArmOptions): Promise<ArmedRecord> {
+    const previousPending = sessionId === null ? this.table.get(PENDING_KEY) : undefined
+    const armedAt = Math.max(
+      Date.now(),
+      this.lastArmedAt + 1,
+      (previousPending?.armedAt ?? 0) + 1,
+    )
+    this.lastArmedAt = armedAt
+    const record: ArmedRecord = { summary, armedAt }
     if (sessionId === null) {
       if (options?.knownSessions !== undefined) record.knownSessions = options.knownSessions
-      if (options?.ttlMs !== undefined) record.expiresAt = Date.now() + options.ttlMs
+      if (options?.ttlMs !== undefined) record.expiresAt = armedAt + options.ttlMs
     }
     await this.table.put(sessionId ?? PENDING_KEY, record)
+    return record
   }
 
   /** 解除武装；sessionId 为 null 时解除 pending。不存在时静默成功。 */
@@ -84,9 +94,15 @@ export class ArmedStore {
     await this.table.delete(sessionId ?? PENDING_KEY)
   }
 
-  /** 作废过期的 pending 武装（装配回调发现超时后调用）。 */
-  async expirePending(): Promise<void> {
-    await this.table.delete(PENDING_KEY)
+  /** 按世代作废过期 pending；旧过期回调不得删除刚重新武装的新记录。 */
+  async expirePending(expect?: { armedAt: number; summary: string }): Promise<void> {
+    await this.table.update(PENDING_KEY, (prev) => {
+      if (prev === undefined) return undefined
+      if (expect !== undefined && (prev.armedAt !== expect.armedAt || prev.summary !== expect.summary)) {
+        return prev
+      }
+      return undefined
+    })
   }
 
   /** 列出当前全部武装（同步读）；特定会话按武装时间升序，pending 排在最后。 */

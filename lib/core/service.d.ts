@@ -12,6 +12,7 @@ import { type Domain } from './storage-adapter.js';
 import type { Config } from '../config.js';
 import { type ChatMessage, type ChatResult } from './deepseek.js';
 import { type CompanionRouter } from './http.js';
+import { InsightCenter } from './insights/center.js';
 import { PriceService } from './price/service.js';
 import type { PriceTable } from './price/types.js';
 import { UsageStore } from './usage.js';
@@ -53,6 +54,8 @@ export interface CallHook {
 export interface CompanionCore {
     readonly config: Config;
     readonly http: CompanionRouter;
+    /** 统一主动智能中心：模块注册信号源，客户端读取聚合 feed 与写回反馈。 */
+    readonly insights: InsightCenter;
     /** 存储域就绪 Promise（open 是异步的）。 */
     readonly ready: Promise<CompanionStore>;
     /** 解析 API Key：保险库优先，其次 credentials seam。 */
@@ -86,6 +89,7 @@ export declare class CompanionCoreService extends Service implements CompanionCo
     /** 依赖服务：HTTP 路由宿主、存储域设施、凭据解析。 */
     static inject: string[];
     readonly http: CompanionRouter;
+    readonly insights: InsightCenter;
     readonly prices: PriceService;
     /** 内部存储域初始化 promise；失败后被重置，下次访问 ready 时重试 open。 */
     private readyPromise?;

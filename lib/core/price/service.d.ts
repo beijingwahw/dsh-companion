@@ -30,8 +30,18 @@ export declare function isPeakTimeAt(atMs: number, windows?: ReadonlyArray<reado
  * 公布分时价时其余模型被错误计为 0 元。
  */
 export declare function resolvePrice(sheet: PriceSheet, model: string, atMs: number): ModelPrice | undefined;
-/** 带超时抓取 URL 文本。 */
-export declare function fetchText(url: string, timeoutMs: number, headers?: Record<string, string>): Promise<string>;
+/**
+ * 定价响应体大小上限（字节）。最胖的官方数据源（智谱 SPA 包、百度 page-data）
+ * 也在数 MiB 量级；超出即视为无限流/异常响应，fail-closed 拒绝而不是读爆内存。
+ */
+export declare const MAX_PRICING_RESPONSE_BYTES: number;
+/**
+ * 带超时与大小上限抓取 URL 文本。流式读取并按累计字节截停：
+ * 超大/无限响应、声明长度超限、连接中途断开（截断）都会抛错，
+ * 绝不把不完整或无边界的响应当成有效官方计价源。
+ * 错误信息只含状态码与字节数，不回带 URL、响应头或响应体内容，避免敏感信息进日志。
+ */
+export declare function fetchText(url: string, timeoutMs: number, headers?: Record<string, string>, maxBytes?: number): Promise<string>;
 /**
  * 解析 DeepSeek 定价页 HTML 为价格表。无可识别价格表时抛错
  * （调用方保留上一份有效表）。

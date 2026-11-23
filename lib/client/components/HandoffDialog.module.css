@@ -1,0 +1,396 @@
+/* 交接摘要对话框样式：颜色只用 --dsw-alias-* 语义令牌（均带回退值）。 */
+/* 会话选择面板视觉与 ExportDialog 的选择界面共享同一套语言： */
+/* 工具栏 + 筛选 + 选中高亮/未选中淡化 + 单选圆点。 */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 480px;
+  max-width: 640px;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+/* 窄视口（≤480px，覆盖 360px 移动宽度）：解除固定 min-width，避免横向溢出。 */
+@media (max-width: 480px) {
+  .body {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--dsw-alias-danger-default, #f54a45);
+  background: var(--dsw-alias-danger-bg, rgba(245, 74, 69, 0.08));
+}
+
+.summaryInput {
+  width: 100%;
+  min-height: 180px;
+  box-sizing: border-box;
+  font-family: 'Noto Sans CJK SC', 'WenQuanYi Micro Hei', system-ui, sans-serif;
+}
+
+.modelInfo {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-default, #dee0e3);
+}
+
+.sectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.templateNameRow {
+  display: flex;
+  gap: 8px;
+}
+
+.templateNameInput {
+  flex: 1;
+}
+
+.templateList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.templateItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+}
+
+.templateMeta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.templateName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.templateTime {
+  font-size: 11px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.empty {
+  padding: 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ------------------------------------------------------------------------- */
+/* 会话选择可视化面板（单选）：工具栏 + 筛选 + 列表 + 单选圆点 */
+/* ------------------------------------------------------------------------- */
+
+.sessionSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sessionToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessionCount {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  font-variant-numeric: tabular-nums;
+}
+
+.sessionList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+}
+
+/* 未选中行：透明边框占位 + 内容淡化（与 ExportDialog 选择行视觉一致）。 */
+.sessionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sessionItem .sessionMeta {
+  opacity: 0.55;
+}
+
+.sessionItem:hover {
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+}
+
+.sessionItem:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-default, #3b82f6);
+  outline-offset: 1px;
+}
+
+.sessionItemSelected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-muted, #f5f6f7);
+  cursor: pointer;
+}
+
+/* 单选圆点：未选中 = 空心描边；选中 = 品牌色实心。 */
+.radioOff,
+.radioOn {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.radioOff {
+  border: 2px solid var(--dsw-alias-border-default, #dee0e3);
+}
+
+.radioOn {
+  border: 2px solid var(--dsw-alias-brand-default, #3b82f6);
+  background: var(--dsw-alias-brand-default, #3b82f6);
+}
+
+.sessionMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sessionTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sessionTitle {
+  font-size: 14px;
+  color: var(--dsw-alias-text-primary, #1f2329);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 「当前」徽章：品牌色标识当前会话（slot 注入的 sessionId）。 */
+.currentBadge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-text-inverse, #ffffff);
+  background: var(--dsw-alias-brand-default, #3b82f6);
+}
+
+.sessionTime {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 轴线 6：上下文压力仪表（token 估算 / 耗尽预测 / 分级建议） */
+/* ------------------------------------------------------------------------- */
+
+.pressureRow {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-default, #dee0e3);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-surface, #ffffff);
+}
+
+.pressureHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pressureLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.pressureValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-primary, #1f2329);
+}
+
+.pressureForecast {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.pressureBar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--dsw-alias-bg-hover, #eef0f3);
+  overflow: hidden;
+}
+
+.pressureFill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--dsw-alias-success-default, #34c724);
+  transition: width 0.3s ease;
+}
+
+.pressureSuggestion {
+  font-size: 12px;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+/* 分级配色：watch 黄、advice 橙、critical 红（fill 与左边框联动）。 */
+.pressure_watch .pressureFill {
+  background: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_advice .pressureFill {
+  background: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_advice {
+  border-color: var(--dsw-alias-warning-default, #ff8800);
+}
+
+.pressure_critical .pressureFill {
+  background: var(--dsw-alias-danger-default, #f54a45);
+}
+
+.pressure_critical {
+  border-color: var(--dsw-alias-danger-default, #f54a45);
+}
+
+/* ------------------------------------------------------------------------- */
+/* 轴线 2：查询聚焦输入行 + 上下文血缘面板 */
+/* ------------------------------------------------------------------------- */
+
+.focusRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.focusInput {
+  flex: 1;
+}
+
+.lineageSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lineageList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lineageGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lineageLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-text-secondary, #646a73);
+}
+
+.lineageItem {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.lineageDepth {
+  flex: none;
+  color: var(--dsw-alias-brand-default, #3b82f6);
+  font-variant-numeric: tabular-nums;
+}
+
+.lineageText {
+  min-width: 0;
+  color: var(--dsw-alias-text-secondary, #646a73);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

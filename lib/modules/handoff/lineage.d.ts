@@ -25,6 +25,8 @@ export interface LineageEdge {
     excerpt: string;
     /** 边建立时间（毫秒）。 */
     linkedAt: number;
+    /** 悬边所属 pending 世代；只有相同 armedAt 的消费/过期才能改写或删除。 */
+    pendingArmedAt?: number;
 }
 /** 图遍历结果条目（含跳数）。 */
 export interface LineageNode {
@@ -46,15 +48,14 @@ export declare class LineageStore {
      * 记录一条继承边；target 为 null 表示悬边（pending 待解析）。
      * 写入后滚动修剪到 EDGE_KEEP_LIMIT 条。
      */
-    recordEdge(source: string, target: string | null, summary: string): Promise<void>;
+    recordEdge(source: string, target: string | null, summary: string, pendingArmedAt?: number): Promise<void>;
     /**
-     * 解析悬边：pending 摘要已投递到 target 会话时，把全部 target=null
-     * 的边改写为该目标（pending 槽位是单例，悬边只能属于同一次武装）。
+     * 按 armedAt 世代解析悬边；重复武装留下的旧悬边不会被新投递误认领。
      * 同时保留原 linkedAt（血缘时间 = 武装时刻）。
      */
-    resolvePendingTargets(target: string): Promise<void>;
-    /** 删除全部悬边（pending 被解除/过期时调用，防止误认领）。 */
-    deletePendingEdges(): Promise<void>;
+    resolvePendingTargets(target: string, armedAt: number): Promise<void>;
+    /** 删除悬边；传入 armedAt 时只清理对应世代，显式解除则清理全部。 */
+    deletePendingEdges(armedAt?: number): Promise<void>;
     /**
      * 祖先链：沿 source 方向向上遍历（谁的内容流入了本会话）。
      * 环安全（visited 去重）；按跳数升序、同跳数按时间升序。

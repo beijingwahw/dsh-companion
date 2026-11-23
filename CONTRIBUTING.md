@@ -19,7 +19,7 @@ pnpm install
 ```bash
 pnpm dev        # 起 cordis + HMR：保存 src/ 任意文件即热重载（无需重启）
 pnpm typecheck  # tsc --noEmit，提交前必须通过
-pnpm build      # tsc → lib/（产物随仓库分发，提交前必须重新构建）
+pnpm build      # tsc → lib/，并复制 CSS Modules 运行资产（产物随仓库分发，提交前必须重新构建）
 pnpm test       # 全部冒烟套件（test/ 下每个 *.mjs 一个子进程，失败即非零退出）
 ```
 

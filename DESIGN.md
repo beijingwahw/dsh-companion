@@ -26,6 +26,7 @@ interface CompanionCore {
   clearApiKey(): Promise<void>
   callDeepSeek(params: CallParams): Promise<ChatResult>  // 直连 + 记账 + companion/usage 事件
   readonly prices: PriceService              // 动态计价引擎（官方定价页抓取/峰谷分时/多厂商目录）
+  readonly insights: InsightCenter           // 统一主动智能中心（Provider 聚合/反馈/克制通知）
   setPricingOverrides(table: PriceTable): void  // 用户自定义单价（模型 id → 单价，最长前缀匹配）
   notice(kind: 'info'|'success'|'warning'|'error', message: string): void
 }
@@ -54,6 +55,8 @@ interface CallParams {
 | `core/retrieval/engine.js` | `HybridRetrievalIndex`（BM25 + trigram 向量 + RRF 融合）, `buildIndexedDoc`, `sanitizeIndexedDoc`, `buildSnippet`, `IndexedDoc`, `HybridHit` |
 | `core/retrieval/tokenize.js` | `tokenize`（词法分词）, `charTrigrams`（字符三元组计数）, `fnv1a32`（FNV-1a 哈希） |
 | `core/http.js` | `createRouter`, `sendJson`, `readJsonBody`, `HttpError`, `HttpHandler` |
+| `core/insights/center.js` | `InsightCenter`（异步 Provider 注册、缓存/single-flight、故障隔离、反馈闭环） |
+| `core/insights/policy.js` | 稳定指纹、优先级、通知冷却、未读/稍后/忽略/恢复与状态净化 |
 | `core/vault.js` | `SecretVault` |
 | `core/ids.js` | `SessionId`, `CredentialRef`, `ScopeKey`（类型 + 构造器） |
 
@@ -86,6 +89,20 @@ export function apply(ctx: Context): void {
 错误响应：非 2xx + `{ "error": string }`。字节内容一律 base64。
 
 错误语义约定：参数/历法校验失败一律 `400`；系统性故障（存储域损坏等）`500`，不与"未找到"混用。
+
+### 统一主动智能中心（跨模块）
+
+- `GET /insights?force=true` → `{ cards, summary, generatedAt, unreadCount, snoozedCount, dismissedCount, providerFailures }`。
+  检索、知识与成本 Provider 经 `ctx.companion.insights.register` 注册；聚合带缓存与 single-flight，
+  单源异常或超时只增加 `providerFailures`，不拖垮其它信号。`force=true` 仅失效并重算，不在数据写路径同步重算。
+- `POST /insights/ack` `{ ids?: string[], all?: boolean }` → `{ ok, acknowledged }`；指纹须为
+  `ins_[0-9a-f]{16}`，单次最多 50 个。打开面板只确认可见未读，不等于忽略或处理完成。
+- `POST /insights/feedback` `{ id, action }`（`helpful/unhelpful/snooze/dismiss/restore/acted/resolved`）
+  或 `{ action: 'restore-all' }` → `{ ok }`；未知单卡指纹 `404`。反馈调整后续排序与通知，
+  稍后 24h，忽略/已解决退出 feed，恢复可逆。
+- 卡片 `actionId` 仅允许 `open-cognition` / `reindex-retrieval`；`action` 永远只是展示文案，
+  不作为命令执行。新持久化状态只保存 64 位指纹、时间、反馈与处理结果，不保存卡片正文或对话正文。
+- 旧 `GET /retrieval/insights` 与 `GET /knowledge/pulse` 保持兼容；新客户端只消费统一 `/insights`。
 
 ### 模块 A（export）
 - `GET  /export/sessions` → `{ sessions: SessionRecord[] }`
@@ -263,7 +280,7 @@ export function apply(ctx: Context): void {
   （显著偏离才播报，冷启动静默）、认知负荷（仅顺延发生时开口）、主题漂移（轴线 30）、
   记忆固化（轴线 31）、回声雷达（轴线 33，模板级才 watch）、临界预警（轴线 35：
   warning → critical 卡附模块 B 交接指引 / watch → watch 卡 / 平静与样本不足静默）
-  十类信号提供者，与检索侧脉搏在客户端合并。
+  十类信号提供者。该端点保留兼容；运行时同时注册到统一主动智能中心，与检索、成本信号在服务端聚合。
 - `GET  /knowledge/forecast` → `{ now, ease, critical: ForgettingForecast[], warning: ForgettingForecast[], criticalCount, warningCount, stableCount, summary }`
   遗忘预测引擎（轴线 23）：为全库每条片段计算连续保持率 `R(t) = exp(-t/S)`——
   稳定性 S = 档位间隔 × 当前节律 ease × 标定因子 `1/-ln(0.7)`（保证到期时刻的
@@ -461,10 +478,12 @@ export function apply(ctx: Context): void {
   8 周迷你柱状图），点击趋势行以实体名发起检索。
 - 轴线 17（G 模块）客户端：`SearchView` 深度研究结果的「知识演化」区块——
   信念时间线行（锚: 旧值 → 新值 + 升级/回退/变化标签 + 时间），附演化摘要。
-- 轴线 18/19（E 模块）客户端：`SearchView` 工具栏「主动脉搏」按钮 → 洞察卡片面板
-  （`/retrieval/insights`，每次打开重新合成）：severity 三级配色（critical/watch/info）
-  + 文本 + 行动建议 + 信号源标注；认知三轴扩展后并行拉取 `/knowledge/pulse`，
-  两源卡片按 severity 合并重排，认知源失败静默降级。
+- 轴线 18/19（统一主动智能）客户端：`SearchView` 工具栏「主动智能」按钮 → 统一洞察面板
+  （`/insights`）：挂载即拉取，页面可见时每 5 分钟低频刷新；AbortController + 请求代次避免
+  陈旧响应覆盖，卸载中止。critical/watch 新未读每挂载周期最多自动展开一次，info 不主动打扰；
+  打开面板确认可见未读。卡片支持有用/无用/稍后/忽略/恢复，`providerFailures` 显示局部降级；
+  白名单动作成功后上报 acted 并强制刷新。面板具备 aria-live、list/listitem、焦点还回、
+  reduced-motion 与 ≤480px 移动适配。
 - 认知三轴（轴线 20/21/22，F 模块）客户端：`SearchView` 工具栏「认知面板」按钮 →
   `CognitionPanel`（`/knowledge/cognition` 单次请求驱动）：到期意图列表（超期徽章，
   ≥14 天转红，点击直达来源会话）+ 即将到来预告行；到期复习为检索式练习卡片
@@ -504,10 +523,12 @@ export function apply(ctx: Context): void {
 
 ## 7. 安全红线
 
-- 网络请求只允许 `config.apiBaseUrl`（默认 https://api.deepseek.com）。
+- 模型请求只允许 HTTPS `config.apiBaseUrl`（默认 https://api.deepseek.com）；官方定价抓取仅访问
+  manifest 明确放行的厂商页面。禁止 HTTP API 基址，避免 Authorization 明文出网。
 - API Key 只经 `ctx.companion.setApiKey`（AES-256-GCM 落盘）或 credentials seam；
   任何响应、日志、事件中不得出现 Key 明文（`/cost/state` 只回 `apiKeyConfigured` 布尔）。
 - 不引入任何追踪/遥测代码；所有数据仅写入 companion 存储域。
+- 主动智能全部在本地聚合；其新增持久化状态不复制卡片正文或对话正文，安全动作仅走白名单。
 
 ## 8. 行为契约与已知局限
 
@@ -526,8 +547,10 @@ export function apply(ctx: Context): void {
   调用成功 settle(actual) 入账并释放差额、失败 release 全额释放。可用额度恒为
   `budget − spent − Σ在途预留`，不变式收紧为「最终支出 ≤ 预算 + Σ在途(实际−估算)⁺」。
   估算经 P95 估值器（模型 × 输入长度分桶滚动样本，冷启动用上界）；预留 TTL = apiTimeoutMs +
-  30s，惰性清扫回收孤儿预留（无空闲定时器）；settle 同步推进 spent 缓存，15s TTL 缓存由此
-  退化为全量扫描兜底。预授权投影口径（spent + 在途 + 估算）触发告警时文案标注「含在途调用预授权」。
+  30s。TTL 只是调用窗口估计：到期仅标记隔离，记录仍占额，必须等待真实 settle/release；
+  极端孤儿保守锁定到进程重启，不把仍在途的额度重复授予新调用。settle 使 spent 缓存失效，
+  下次读取以已落盘账本全量重算，避免并发刷新双重计入。预授权投影口径（spent + 在途 + 估算）
+  触发告警时文案标注「含在途调用预授权」。
   旧 TOCTOU 局限（并发集体过闸，超支 ≈ 并发数 × 单次全额）收敛为估算误差量级。
 - **预算闸门覆盖延迟队列**：drain 执行每个排队任务前复检预算；暂停期间排队任务以
   `INSUFFICIENT_BALANCE` 被逐个 reject，延迟队列不是闸门旁路。预授权在任务真正执行
@@ -549,6 +572,9 @@ export function apply(ctx: Context): void {
   天然免疫误投递；无作用域的全局装配不消费摘要。超时未投递自动作废（防僵尸注入）。
   投递成功写入回执（`handoff-receipts` 表，按会话覆盖、滚动保留 20 条），
   `GET /handoff/armed` 附带回执供 dock 展示「已注入会话 X」。
+  血缘悬边记录 `pendingArmedAt`：过期、解除与投递只改写对应世代，旧回调不能删除或认领
+  重新武装后的记录；`armedAt` 在同毫秒连续 re-arm 时也保持单调唯一。分层摘要段级缓存使用
+  SHA-256（片段 + focus），避免 32 位哈希碰撞把其它片段摘要注入交接。
   旧格式记录（无快照字段）回退 v0.1 近似：注入下一次系统提示词装配；
   快照失败（会话引擎异常）同样退化为无快照武装，不阻塞武装操作。
 
