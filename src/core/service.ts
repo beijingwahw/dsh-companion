@@ -162,6 +162,13 @@ export class CompanionCoreService extends Service implements CompanionCore {
       }),
       'companion.insights-feed',
     )
+    // 主动智能子系统健康（可观测性）：静默失败的信号源比没有信号更危险。
+    ctx.effect(
+      () => this.http.add('GET', '/insights/health', async (_req, res) => {
+        sendJson(res, 200, this.insights.health())
+      }),
+      'companion.insights-health',
+    )
     ctx.effect(
       () => this.http.add('POST', '/insights/ack', async (_req, res, { body }) => {
         const record = insightBody(body)

@@ -1,7 +1,7 @@
 {
   "name": "dsh-companion",
-  "version": "0.7.0",
-  "description": "DeepSeek Companion — DeepSeek Harness 官方伴侣插件：统一主动智能、对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、本地语义检索、对话知识资产、跨会话知识合成。",
+  "version": "0.8.0",
+  "description": "DeepSeek Companion — DeepSeek Harness 官方伴侣插件：统一主动智能 2.0（语义抑制/效用学习/节律门/好奇心/意图预报）、对话智能导出、上下文交接摘要、API 成本优化、全局对话检索、语料自适应混合检索、对话知识资产、跨会话知识合成。",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

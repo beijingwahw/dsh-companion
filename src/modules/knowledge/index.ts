@@ -30,7 +30,13 @@
  * - **主题漂移**（轴线 30）：会话流上的 BOCPD 变点检测——前向后向
  *   平滑的变点置信度 + MAP 主题分段，回答「注意力何时从 A 切到 B」；
  * - **记忆固化**（轴线 31）：片段库上的 MinHash-LSH 近重复检测——
- *   同一问题的多次出现聚簇折叠，重复计数即天然强化信号。
+ *   同一问题的多次出现聚簇折叠，重复计数即天然强化信号；
+ * - **好奇心引擎**（轴线 37）：主动智能的「发现层」——知识缺口
+ *   （两块成型大陆之间缺少翻译层）、注意力退潮（枢纽主题活跃度
+ *   下滑）、桥接机会（时间上交替活跃但图上疏远的主题对）；
+ * - **意图预报**（轴线 38）：三类先验预测「接下来可能要处理什么」
+ *   ——节律（小时×星期的主题条件分布）、延续（主题序列一阶
+ *   马尔可夫转移）、回访（历史回访间隔中位数外推窗口）。
  *
  * 组成：
  * - 惰性增量倒排索引：每次查询前对账 sessionQuery.listSessions() 与
@@ -131,6 +137,7 @@ import {
   forgettingForecastInsights,
   loadInsights,
   rhythmInsights,
+  type InsightCard,
   type PulseReport,
 } from '../../core/insights/pulse.js'
 import { buildEntityGraph, type EntityGraph } from '../../core/graph/graph.js'
@@ -158,6 +165,15 @@ import {
 } from '../../core/cognition/radar.js'
 import { detectDarkMatter, type DarkMatterReport } from '../../core/cognition/darkmatter.js'
 import { detectBrokerage, type BrokerageReport } from '../../core/cognition/brokerage.js'
+import {
+  buildActivitySeries,
+  computeCuriosity,
+  type CuriosityReport,
+} from '../../core/cognition/curiosity.js'
+import {
+  forecastIntents,
+  type IntentForecastReport,
+} from '../../core/cognition/intent.js'
 import {
   detectEarlyWarning,
   type EarlyWarningReport,
@@ -1131,6 +1147,74 @@ export function apply(ctx: Context): void {
   }
 
   /**
+   * 好奇心视图（轴线 37）：知识缺口 / 注意力退潮 / 桥接机会。
+   *
+   * 活跃度序列由实体倒排索引投影（零转录重读）：把最近 8 周按周分桶，
+   * 统计每个实体在各周出现的会话数——这是「注意力随时间的分布」的
+   * 最廉价代理，与轴线 26/33 的图和会话投影同源。
+   */
+  async function curiosityView(): Promise<CuriosityReport> {
+    const graph = entityGraphOf()
+    const now = Date.now()
+    const buckets = 8
+    const windowMs = buckets * 7 * 24 * 3600_000
+    // 会话创建时间（倒排索引的会话集合 → 时间）。
+    const sessionTimes = new Map<string, number>()
+    try {
+      for (const session of await ctx.sessionQuery.listSessions()) {
+        sessionTimes.set(String(session.id), session.createdAt)
+      }
+    } catch {
+      // 头信息失败：无时间信号的实体自动跳过，不阻塞缺口/桥接分析。
+    }
+    // 实体 → 各周会话出现次数（从倒排索引的会话集合投影）。
+    const series = new Map<string, number[]>()
+    const entitySessions = loadSnapshot().entities
+    for (const [key, record] of entitySessions) {
+      const array = new Array<number>(buckets).fill(0)
+      let touched = false
+      for (const sessionId of Object.keys(record.sessions)) {
+        const at = sessionTimes.get(sessionId)
+        if (at === undefined) continue
+        const age = now - at
+        if (age < 0 || age >= windowMs) continue
+        const index = buckets - 1 - Math.floor(age / (windowMs / buckets))
+        array[index] += 1
+        touched = true
+      }
+      if (touched) series.set(key, array)
+    }
+    return computeCuriosity(graph, series, { topK: 3 })
+  }
+
+  /** 意图预报视图（轴线 38）：节律 / 延续 / 回访三类先验。 */
+  async function intentForecastView(): Promise<IntentForecastReport> {
+    await ctx.companion.ready
+    await syncKnowledge(false)
+    const sessions = await ctx.sessionQuery.listSessions()
+    const sessionEntityNames = buildSessionEntityNames()
+    const units = sessions.map((session) => ({
+      id: String(session.id),
+      at: session.createdAt,
+      text: `${session.title ?? ''} ${sessionEntityNames.get(String(session.id))?.join(' ') ?? ''}`.trim(),
+    }))
+    return forecastIntents(units, Date.now(), { topK: 5 })
+  }
+
+  /** 构建会话 id → 实体名列表的映射（倒排索引反查，零转录重读）。 */
+  function buildSessionEntityNames(): Map<string, string[]> {
+    const map = new Map<string, string[]>()
+    for (const [, record] of loadSnapshot().entities) {
+      for (const sessionId of Object.keys(record.sessions)) {
+        const list = map.get(sessionId) ?? []
+        if (list.length === 0) map.set(sessionId, list)
+        list.push(record.name)
+      }
+    }
+    return map
+  }
+
+  /**
    * 模块 F 主动脉搏（轴线 18 的信号源扩展：意图 + 复习 + 片段 +
    * 元认知三轴[遗忘预测/节律/负荷] + 漂移[轴 30] + 固化[轴 31] +
    * 回声[轴 33] + 临界预警[轴 35]）。
@@ -1222,6 +1306,49 @@ export function apply(ctx: Context): void {
       }))
     }),
     'companion.knowledge-insight-provider',
+  )
+
+  // 好奇心信号源（轴线 37）：知识缺口 / 注意力退潮 / 桥接机会。
+  // 推送克制：只把「最值得打通的缺口」与「最明显的退潮」各推一张，
+  // 桥接机会（信息型）只在无更高优先级信号时出现。
+  ctx.effect(
+    () =>
+      ctx.companion.insights.register(async (): Promise<readonly InsightCard[]> => {
+        await ctx.companion.ready
+        await syncKnowledge(false)
+        const report = await curiosityView()
+        const cards: InsightCard[] = []
+        const topGap = report.gaps[0]
+        if (topGap !== undefined && topGap.score >= 0.35) {
+          cards.push({
+            category: 'knowledge',
+            key: 'curiosity:gap',
+            severity: topGap.score >= 0.7 ? 'watch' : 'info',
+            text:
+              `知识缺口：「${topGap.leftTerms.join('、')}」与「${topGap.rightTerms.join('、')}」` +
+              `两块大陆之间只有 ${topGap.crossEdges} 条连接——两侧都已成规模，却缺少翻译层`,
+            action:
+              '下一场对话值得把这两个主题放到一起——跨域的好想法往往来自结构洞的另一侧',
+            source: '好奇心引擎（轴 37）',
+          })
+        }
+        const topDecay = report.decays[0]
+        if (topDecay !== undefined && topDecay.score >= 0.3) {
+          cards.push({
+            category: 'topic',
+            key: 'curiosity:decay',
+            severity: topDecay.score >= 0.5 ? 'watch' : 'info',
+            text:
+              `注意力退潮：「${topDecay.anchor}」近期活跃度降至基线的 ` +
+              `${Math.round(topDecay.ratio * 100)}%（图上度数 ${topDecay.degree}）——` +
+              `曾经的枢纽主题正在降温`,
+            action: '如果这个主题仍然重要，现在补一场对话比遗忘后重建便宜',
+            source: '好奇心引擎（轴 37）',
+          })
+        }
+        return cards
+      }),
+    'companion.knowledge-curiosity-provider',
   )
 
   // ------------------------------------------------------------------
@@ -1568,6 +1695,24 @@ export function apply(ctx: Context): void {
         sendJson(res, 200, brokerageView(limit))
       }),
     'companion.knowledge-http-brokerage',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/knowledge/curiosity', async (_req, res) => {
+        await ctx.companion.ready
+        await syncKnowledge(false)
+        sendJson(res, 200, await curiosityView())
+      }),
+    'companion.knowledge-http-curiosity',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.companion.http.add('GET', '/knowledge/intents', async (_req, res) => {
+        sendJson(res, 200, await intentForecastView())
+      }),
+    'companion.knowledge-http-intents',
   )
 
   // ------------------------------------------------------------------
@@ -2353,6 +2498,105 @@ export function apply(ctx: Context): void {
         },
       }),
     'companion.knowledge-command-darkmatter',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'curiosity',
+        description: '好奇心引擎：发现知识缺口、注意力退潮与桥接机会（轴线 37）',
+        input: { hint: '' },
+        handler: async (): Promise<CommandResult> => {
+          try {
+            await ctx.companion.ready
+            await syncKnowledge(false)
+            const report = await curiosityView()
+            const lines: string[] = []
+            lines.push('【好奇心引擎 · 轴线 37】')
+            lines.push('')
+            if (report.gaps.length === 0 && report.decays.length === 0 && report.bridges.length === 0) {
+              lines.push('  知识图谱结构均衡，暂未发现值得主动指出的缺口或退潮')
+            }
+            if (report.gaps.length > 0) {
+              lines.push('  ◆ 知识缺口（两块成型大陆之间缺少翻译层）')
+              for (const gap of report.gaps) {
+                lines.push(
+                  `    · 「${gap.leftTerms.join('、')}」↔「${gap.rightTerms.join('、')}」` +
+                    `（两侧 ${gap.leftSize}/${gap.rightSize} 实体，跨社区边 ${gap.crossEdges}，` +
+                    `缺口 ${(gap.score * 100).toFixed(0)}%）`,
+                )
+              }
+              lines.push('')
+            }
+            if (report.decays.length > 0) {
+              lines.push('  ◆ 注意力退潮（曾经的枢纽主题正在降温）')
+              for (const decay of report.decays) {
+                lines.push(
+                  `    · 「${decay.anchor}」活跃度降至基线的 ${Math.round(decay.ratio * 100)}%` +
+                    `（度数 ${decay.degree}，退潮 ${(decay.score * 100).toFixed(0)}%）`,
+                )
+              }
+              lines.push('')
+            }
+            if (report.bridges.length > 0) {
+              lines.push('  ◆ 桥接机会（时间上交替活跃但图上疏远）')
+              for (const bridge of report.bridges) {
+                lines.push(
+                  `    · 「${bridge.left}」↔「${bridge.right}」` +
+                    `（相关 ${bridge.correlation.toFixed(2)}，跳数 ${bridge.hopDistance ?? '不可达'}）`,
+                )
+              }
+              lines.push('')
+            }
+            lines.push(`  ${report.summary}`)
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: error instanceof HttpError ? error.message : '好奇心引擎分析失败，请稍后重试',
+            }
+          }
+        },
+      }),
+    'companion.knowledge-command-curiosity',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.commands.register({
+        name: 'forecast-intents',
+        description: '意图预报：预测你接下来可能要处理什么（节律/延续/回访三类先验，轴线 38）',
+        input: { hint: '' },
+        handler: async (): Promise<CommandResult> => {
+          try {
+            const report = await intentForecastView()
+            const lines: string[] = []
+            lines.push('【意图预报 · 轴线 38】')
+            lines.push('')
+            if (report.forecasts.length === 0) {
+              lines.push(`  ${report.summary}`)
+            } else {
+              for (const forecast of report.forecasts) {
+                const kindLabel =
+                  forecast.kind === 'rhythm' ? '节律' : forecast.kind === 'continuation' ? '延续' : '回访'
+                lines.push(
+                  `  ◆ [${kindLabel} ${(forecast.confidence * 100).toFixed(0)}%] ` +
+                    `「${forecast.topic.join('、')}」—— ${forecast.reason}`,
+                )
+              }
+              lines.push('')
+              lines.push(`  ${report.summary}`)
+            }
+            return { kind: 'success', text: lines.join('\n') }
+          } catch (error) {
+            return {
+              kind: 'error',
+              text: error instanceof HttpError ? error.message : '意图预报失败，请稍后重试',
+            }
+          }
+        },
+      }),
+    'companion.knowledge-command-intents',
   )
 
   ctx.effect(

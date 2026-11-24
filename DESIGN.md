@@ -55,8 +55,10 @@ interface CallParams {
 | `core/retrieval/engine.js` | `HybridRetrievalIndex`（BM25 + trigram 向量 + RRF 融合）, `buildIndexedDoc`, `sanitizeIndexedDoc`, `buildSnippet`, `IndexedDoc`, `HybridHit` |
 | `core/retrieval/tokenize.js` | `tokenize`（词法分词）, `charTrigrams`（字符三元组计数）, `fnv1a32`（FNV-1a 哈希） |
 | `core/http.js` | `createRouter`, `sendJson`, `readJsonBody`, `HttpError`, `HttpHandler` |
-| `core/insights/center.js` | `InsightCenter`（异步 Provider 注册、缓存/single-flight、故障隔离、反馈闭环） |
-| `core/insights/policy.js` | 稳定指纹、优先级、通知冷却、未读/稍后/忽略/恢复与状态净化 |
+| `core/insights/center.js` | `InsightCenter` v2（Provider 注册、缓存/single-flight、故障隔离、反馈闭环、健康可观测性、节律门、溯源元数据） |
+| `core/insights/policy.js` | 稳定指纹、语义抑制（跨源同主题合并）、效用学习（per-source Wilson 下界）、节律感知通知资格、状态净化 |
+| `core/cognition/curiosity.js` | `computeCuriosity`（知识缺口 / 注意力退潮 / 桥接机会，轴线 37）、`buildActivitySeries` |
+| `core/cognition/intent.js` | `forecastIntents`（节律 / 延续 / 回访三类意图先验，轴线 38）、`clusterTopics` |
 | `core/vault.js` | `SecretVault` |
 | `core/ids.js` | `SessionId`, `CredentialRef`, `ScopeKey`（类型 + 构造器） |
 
@@ -230,7 +232,7 @@ export function apply(ctx: Context): void {
   主动脉搏（轴线 18）：主动洞察引擎——信号提供者注入式聚合盲区缺口 / 反馈学习画像 /
   索引健康三类信号源，severity（critical/watch/info）排序、封顶 6 条、单源失败静默隔离。
 
-### 模块 F（knowledge）
+### 模块 F（knowledge，含轴线 37/38：好奇心引擎与意图预报）
 - `GET  /knowledge/status` → `{ sessions, entities, updated, removed, lastSyncAt }`
   实体倒排索引状态（已分析会话数 / 实体总数 / 最近对账增删量）。
 - `GET  /knowledge/entities?type=&limit=50` → `{ entities: [{ name, type, sessionCount, totalFreq, sampleSessions }] }`
@@ -274,6 +276,13 @@ export function apply(ctx: Context): void {
   查询侧偶发约束不稀释同构判定）；主题词元重叠低 + 形状分高 → **跨域类比**
   （领域不同而结构相同——主题检索永远找不到的先例），重叠高 → 同域先例。
   `q` 必填且 ≤500 字符；查询识别不出结构时返回空结果 + 引导文案。
+- `GET  /knowledge/curiosity` → `{ entities, communities, gaps, decays, bridges, summary }`
+  好奇心引擎（轴线 37）：知识缺口（两块成型大陆之间缺少翻译层——社区间边密度 vs 社区内密度的缺口分 ×
+  两侧规模）、注意力退潮（枢纽实体近期活跃度 vs 历史基线 × 度数权重）、桥接机会（活跃度序列
+  Spearman 负相关 + 图上 BFS 距离 ≥ 3）。全部纯本地、确定性。
+- `GET  /knowledge/intents` → `{ now, sessions, topics, forecasts, rhythmTopTopics, continuationTopTopics, returnTopTopics, summary }`
+  意图预报引擎（轴线 38）：三类先验预测「接下来可能要处理什么」——节律先验（小时×星期桶的主题条件分布 +
+  拉普拉斯平滑）、延续先验（主题序列的一阶马尔可夫转移）、回访先验（主题历史回访间隔中位数外推窗口）。
 - `GET  /knowledge/pulse` → `{ cards, summary, generatedAt }`
   认知脉搏（轴线 18 的认知信号源）：到期意图（critical/watch）、到期复习、片段资产
   （空库/积累中/跨域就绪三态）、遗忘预测（critical/watch/info/静默四态）、记忆节律

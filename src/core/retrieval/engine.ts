@@ -26,11 +26,49 @@ import { charTrigrams, fnv1a32, tokenize } from './tokenize.js'
 /** 哈希向量维度（2 的幂，位运算取模）。 */
 const VECTOR_DIM = 512
 
-/** BM25 参数：词频饱和度。 */
-const BM25_K1 = 1.2
+/**
+ * BM25 参数的**语料自适应**（轴线 37）。
+ *
+ * 固定 k1=1.2 / b=0.75 是「平均网页语料」的经验值。个人对话语料与
+ * 之差异极大：短会话占多数、术语密度高、同一会话内重复度高。固定
+ * b=0.75 会让短会话被过度惩罚（长度归一过强），固定 k1=1.2 会让高频
+ * 术语饱和过快。
+ *
+ * 本实现用**语料统计矩**推导参数（无监督、确定性、零外部依赖）：
+ * - **b 随平均文档长度变化**：语料越短，长度归一越弱——短文档的长度
+ *   差异多半是信息量差异而非冗余。公式
+ *   `b = clamp(0.35, 0.85, 0.75 × log(1 + avgLen) / log(301))`，
+ *   300 词元是「长度差异开始代表冗余」的经验拐点。
+ * - **k1 随术语密度变化**：TTR（唯一词元 / 总词元）越高，词频饱和
+ *   越慢（需要更大的 k1 才能让高频词继续贡献）。公式
+ *   `k1 = clamp(0.9, 2.0, 1.2 × (0.5 + TTR))`。
+ *
+ * 调用方可用 `setBm25Params` 覆盖（测试与调参用）。
+ */
+export interface AdaptiveBm25Params {
+  /** 词频饱和度 k1 ∈ [0.9, 2.0]。 */
+  readonly k1: number
+  /** 文档长度归一强度 b ∈ [0.35, 0.85]。 */
+  readonly b: number
+}
 
-/** BM25 参数：文档长度归一强度。 */
-const BM25_B = 0.75
+/** 从语料统计推导 BM25 参数（纯函数，可单测）。 */
+export function deriveBm25Params(stats: {
+  readonly avgLength: number
+  /** 唯一词元总数（去重后的词表大小）。 */
+  readonly vocabularySize: number
+  /** 全部文档词元总数。 */
+  readonly totalTokens: number
+}): AdaptiveBm25Params {
+  const avgLength = Math.max(1, stats.avgLength)
+  // 长度归一强度：短语料弱归一，长语料强归一。
+  const lengthRatio = Math.log(1 + avgLength) / Math.log(301)
+  const b = Math.min(0.85, Math.max(0.35, 0.75 * lengthRatio))
+  // 术语密度（TTR）：个人对话语料通常 0.3–0.7。
+  const ttr = stats.totalTokens > 0 ? stats.vocabularySize / stats.totalTokens : 0.4
+  const k1 = Math.min(2.0, Math.max(0.9, 1.2 * (0.5 + ttr)))
+  return { k1: Number(k1.toFixed(3)), b: Number(b.toFixed(3)) }
+}
 
 /** RRF 融合常数（业界惯用 60：排名越靠前边际收益衰减越快）。 */
 export const RRF_K = 60
@@ -162,6 +200,10 @@ export class HybridRetrievalIndex {
   private readonly postings = new Map<string, Set<string>>()
   /** 全量文档词元总数（增量维护；BM25 平均长度基准）。 */
   private totalLength = 0
+  /** 语料自适应 BM25 参数（增量重算；见 deriveBm25Params）。 */
+  private adaptiveParams: AdaptiveBm25Params = { k1: 1.2, b: 0.75 }
+  /** 用户覆盖的 BM25 参数（调参/测试；设置后不再自适应）。 */
+  private paramsOverride?: AdaptiveBm25Params
 
   /** 当前已索引文档数。 */
   get size(): number {
@@ -183,6 +225,32 @@ export class HybridRetrievalIndex {
     return this.termDf
   }
 
+  /** 当前生效的 BM25 参数（语料自适应或用户覆盖）。 */
+  bm25Params(): AdaptiveBm25Params {
+    return this.paramsOverride ?? this.adaptiveParams
+  }
+
+  /** 覆盖 BM25 参数（undefined 恢复语料自适应）。 */
+  setBm25Params(params: AdaptiveBm25Params | undefined): void {
+    this.paramsOverride = params
+  }
+
+  /** 语料自适应诊断（供端点展示「为什么用这组参数」）。 */
+  bm25Diagnostics(): AdaptiveBm25Params & {
+    readonly adaptive: boolean
+    readonly avgLength: number
+    readonly vocabularySize: number
+    readonly totalTokens: number
+  } {
+    return {
+      ...this.bm25Params(),
+      adaptive: this.paramsOverride === undefined,
+      avgLength: this.docs.size > 0 ? this.totalLength / this.docs.size : 0,
+      vocabularySize: this.termDf.size,
+      totalTokens: this.totalLength,
+    }
+  }
+
   /** 包含指定词元的文档迭代器（倒排表直达）：共现扩展消费。 */
   *docsWithTerm(term: string): Generator<IndexedDoc, void, undefined> {
     const ids = this.postings.get(term)
@@ -199,6 +267,7 @@ export class HybridRetrievalIndex {
     if (prev !== undefined) this.removeStats(prev)
     this.docs.set(doc.sessionId, doc)
     this.addStats(doc)
+    this.recomputeAdaptiveParams()
   }
 
   /** 删除一篇文档；不存在时静默（统计与倒排同步回滚）。 */
@@ -207,6 +276,7 @@ export class HybridRetrievalIndex {
     if (prev === undefined) return
     this.removeStats(prev)
     this.docs.delete(sessionId)
+    this.recomputeAdaptiveParams()
   }
 
   /** 批量替换内存文档集（持久化恢复路径；统计与倒排全量重建）。 */
@@ -220,6 +290,16 @@ export class HybridRetrievalIndex {
       this.docs.set(doc.sessionId, doc)
       this.addStats(doc)
     }
+    this.recomputeAdaptiveParams()
+  }
+
+  /** 重算语料自适应 BM25 参数（增量维护后的 O(1) 推导）。 */
+  private recomputeAdaptiveParams(): void {
+    this.adaptiveParams = deriveBm25Params({
+      avgLength: this.docs.size > 0 ? this.totalLength / this.docs.size : 0,
+      vocabularySize: this.termDf.size,
+      totalTokens: this.totalLength,
+    })
   }
 
   /** 累加一篇文档的全量统计与倒排项。 */
@@ -388,6 +468,16 @@ export class HybridRetrievalIndex {
     const scores = new Map<string, number>()
     const terms = [...new Set(tokenize(queryText))]
     if (terms.length === 0) return scores
+    // 语料自适应参数：全量路径直读增量维护的参数；过滤视图路径下用
+    // 视图统计重算（保证 IDF 与参数都与视图一致）。
+    const { k1, b } =
+      stats.docCount === this.docs.size
+        ? this.bm25Params()
+        : deriveBm25Params({
+            avgLength: stats.avgLength,
+            vocabularySize: stats.termDf.size,
+            totalTokens: stats.avgLength * stats.docCount,
+          })
     for (const doc of corpus) {
       let score = 0
       for (const term of terms) {
@@ -396,7 +486,7 @@ export class HybridRetrievalIndex {
         const df = stats.termDf.get(term) ?? 0
         const idf = Math.log(1 + (docCount - df + 0.5) / (df + 0.5))
         const lengthNorm = stats.avgLength > 0 ? doc.length / stats.avgLength : 1
-        score += idf * ((tf * (BM25_K1 + 1)) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * lengthNorm)))
+        score += idf * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + b * lengthNorm)))
       }
       if (score > 0) scores.set(doc.sessionId, score)
     }

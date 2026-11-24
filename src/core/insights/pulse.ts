@@ -33,6 +33,7 @@ export type InsightCategory =
   | 'forecast'
   | 'echo'
   | 'earlywarning'
+  | 'knowledge'
 
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info'

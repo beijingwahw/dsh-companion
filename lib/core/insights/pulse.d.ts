@@ -20,7 +20,7 @@
  * 同一时刻的两次调用产生相同结果（可测试性）。
  */
 /** 洞察分类（决定展示分组与图标语义）。 */
-export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo' | 'earlywarning';
+export type InsightCategory = 'blindspot' | 'learning' | 'index' | 'cost' | 'context' | 'topic' | 'intention' | 'review' | 'forecast' | 'echo' | 'earlywarning' | 'knowledge';
 /** 洞察严重度（驱动排序与视觉强调）。 */
 export type InsightSeverity = 'critical' | 'watch' | 'info';
 /** 可选安全动作；只能由白名单处理器解释，绝不执行任意命令文本。 */

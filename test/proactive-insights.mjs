@@ -37,12 +37,32 @@ await ok('稳定指纹不随正文和建议计数变化', () => {
 })
 
 await ok('首轮通知最多三条，feed 不被通知配额截断', () => {
-  const cards = Array.from({ length: 5 }, (_, index) => card({ key: `k${index}`, text: `正文 ${index}` }))
+  // 五张**异主题**卡片（语义合并不应介入）。
+  const texts = [
+    'docker 容器网络配置失败需要排查',
+    'react 组件状态管理方案对比',
+    'typescript 类型推断优化技巧',
+    'kubernetes 部署流水线配置',
+    '数据库查询性能调优实践',
+  ]
+  const cards = texts.map((text, index) => card({ key: `k${index}`, text }))
   const result = applyInsightPolicy(cards, new Map(), NOW)
-  assert.equal(result.cards.length, 5)
+  assert.equal(result.cards.length, 5, '异主题卡片不应被语义合并')
   assert.equal(result.notifications.length, 3)
   assert.equal(result.unreadCount, undefined)
   assert.equal(result.cards.filter((item) => item.unread).length, 3)
+  assert.equal(result.mergedCount, 0)
+})
+
+await ok('语义合并：同主题不同源的冗余卡折叠为一张（v2 升级）', () => {
+  const cards = [
+    card({ key: 'a', source: '源 A', text: '你有 5 条知识保持率跌破 70%，建议复习' }),
+    card({ key: 'b', source: '源 B', text: '你有 5 条知识保持率跌破 70%，需要巩固' }),
+  ]
+  const result = applyInsightPolicy(cards, new Map(), NOW)
+  assert.equal(result.cards.length, 1, '同主题卡应折叠为一张')
+  assert.equal(result.mergedCount, 1)
+  assert.equal(result.cards[0].mergedCount, 1)
 })
 
 await ok('冷却期内不重复通知，严重度升级可突破冷却', () => {
@@ -89,8 +109,9 @@ await ok('忽略退出 feed，恢复后重新出现；resolved 保留处理结�
 })
 
 await ok('有用反馈提升同严重度排序，无用反馈降低排序', () => {
-  const a = card({ key: 'a', severity: 'watch' })
-  const b = card({ key: 'b', severity: 'watch' })
+  // 两张卡必须**异主题**，否则语义合并会先折叠掉一张。
+  const a = card({ key: 'a', severity: 'watch', text: 'docker 容器网络配置问题' })
+  const b = card({ key: 'b', severity: 'watch', text: 'react 组件状态管理方案' })
   const aId = insightId(a)
   const bId = insightId(b)
   const previous = new Map([

@@ -977,6 +977,12 @@ export interface ManagedInsightCard extends InsightCard {
   readonly feedback?: 'helpful' | 'unhelpful'
   /** 处置结果（已行动/已解决/已忽略）。 */
   readonly outcome?: 'acted' | 'resolved' | 'dismissed'
+  /** 语义抑制：本卡吸收的同主题卡数（v2）。 */
+  readonly mergedCount?: number
+  /** 效用学习：信号源可信度（Wilson 下界，v2）。 */
+  readonly sourceTrust?: number
+  /** 节律感知：因节律窗口关闭而未推送（feed 仍可见，v2）。 */
+  readonly rhythmSuppressed?: boolean
 }
 
 /** `GET /insights` 响应：统一主动智能 feed。 */
@@ -992,6 +998,44 @@ export interface InsightsResponse {
   readonly dismissedCount: number
   /** 本次合成中失败的信号源数量（>0 时面板降级提示）。 */
   readonly providerFailures: number
+  /** 被语义抑制合并的同主题卡数（v2）。 */
+  readonly mergedCount?: number
+  /** 因节律窗口关闭而未推送的卡数（v2）。 */
+  readonly rhythmSuppressedCount?: number
+  /** 各信号源可信度快照（v2；source → Wilson 下界）。 */
+  readonly sourceTrust?: Readonly<Record<string, number>>
+  /** 各卡片溯源（v2；指纹 → 来源/可信度/合并数/延迟）。 */
+  readonly provenance?: Readonly<Record<string, InsightProvenance>>
+}
+
+/** 单张洞察卡的溯源元数据（v2）。 */
+export interface InsightProvenance {
+  /** 信号来源标识。 */
+  readonly source: string
+  /** 该源的可信度（Wilson 下界，[0,1]）。 */
+  readonly trust: number
+  /** 本卡吸收的同主题卡数。 */
+  readonly merged: number
+  /** 是否因节律窗口关闭而未推送。 */
+  readonly rhythmSuppressed: boolean
+  /** 采集延迟（毫秒）。 */
+  readonly latencyMs?: number
+}
+
+/** 主动智能子系统健康报告（v2）。 */
+export interface InsightsHealth {
+  readonly providers: number
+  readonly healthyProviders: number
+  readonly failedProviders: number
+  readonly refreshes: number
+  readonly providerFailures: number
+  readonly providerSuccessRate: number
+  readonly lastRefreshMs: number
+  readonly avgRefreshMs: number
+  readonly notifications: number
+  readonly rhythmSuppressed: number
+  readonly merged: number
+  readonly lastRefreshAt: number | null
 }
 
 /** `POST /insights/ack` 请求体：按 id 列表或全部标记已读。 */
@@ -1026,6 +1070,11 @@ export function fetchInsights(
     { force: request?.force ? 'true' : undefined },
     options,
   )
+}
+
+/** 拉取主动智能子系统健康报告（v2：静默失败的信号源比没有信号源更危险）。 */
+export function fetchInsightsHealth(options?: RequestOptions): Promise<InsightsHealth> {
+  return companionGet<InsightsHealth>('/insights/health', undefined, options)
 }
 
 /** 已读上报：按 id 列表或全部（打开面板后 ack 全部可见未读）。 */
